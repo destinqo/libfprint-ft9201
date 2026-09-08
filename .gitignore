@@ -1,0 +1,18 @@
+# Build products
+build/
+*.o
+*.so
+*.rpm
+
+# Captured frames are biometric data. Captures of the vendor driver hold
+# the proprietary firmware image. Keep both out of this repository.
+*.pgm
+*.pcap
+*.pcapng
+*.bin
+samples/
+
+# Editor and backup files
+*.bak
+*~
+.*.swp

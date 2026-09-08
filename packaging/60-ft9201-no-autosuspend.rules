@@ -1,0 +1,12 @@
+# Keep the FocalTech FT9201 out of USB autosuspend.
+#
+# Fedora's own 60-autosuspend-libfprint-2.hwdb enables autosuspend for
+# 2808:93a9, and on this sensor that is measurably harmful: the device was
+# observed suspended for 105 seconds against 36 seconds active during
+# testing, and the sensor's finger detector does not survive that reliably.
+# It also has no persistent firmware, so anything that disturbs its power
+# state risks costing a re-download.
+#
+# This rule wins because udev rules are applied after hwdb properties.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2808", ATTR{idProduct}=="93a9", \
+    TEST=="power/control", ATTR{power/control}="on"
