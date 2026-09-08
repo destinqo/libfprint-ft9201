@@ -5,9 +5,14 @@ reader (`USB\VID_2808&PID_93A9`). The sensor operates through the usual
 `fprintd` and PAM stack. You do not need an out-of-tree kernel module, a
 patched proprietary `.so`, or a Secure Boot MOK enrolment.
 
-> **The state of this work:** the driver operates, and the section
-> "Verification: how it operates" gives the measurements and their limits.
-> The section "Known issues" gives the faults that remain.
+> **This driver is experimental. Keep your password authentication.**
+> The match threshold is not a measured security parameter. Tests used two
+> fingers of one person, thus they cannot give a rate of incorrect accept
+> operations. Approximately one press of four also scores below the
+> threshold and needs a second press. Do not use this sensor as the only
+> authentication factor. The section "Verification: how it operates" gives
+> the measurements and their limits, and the section "Known issues" gives
+> the faults that remain.
 
 ## What this is
 
@@ -305,10 +310,14 @@ Thus a test must present a finger quickly.
 
 ## How to use it for the login, sudo and lock screen
 
-> **Test the verification first.** The driver has its own matcher, and
-> its threshold has data from one person only. Refer to "Verification:
-> how it operates". Enrol a finger, verify the correct finger, verify a
-> different finger, and only then make the change below.
+> **Test the verification first, and keep the password.** The driver has
+> its own matcher, and its threshold has data from one person only. Refer
+> to "Verification: how it operates". Enrol a finger, verify the correct
+> finger, verify a different finger, and only then make the change below.
+>
+> The change below adds the fingerprint as one more method. It does not
+> remove the password, and you must not remove it. A fingerprint that the
+> sensor does not accept then leaves you with a method that operates.
 
 Fedora uses `authselect` and not `pam-auth-update`:
 
