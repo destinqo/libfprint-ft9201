@@ -30,6 +30,11 @@ accepts either and tells them apart by itself:
                         to confirm what a given machine really uploads.
                         Making one is described in the driver README.
 
+There is also a fourth route, and it needs no vendor file at all. Microsoft
+publishes the same Windows driver in their Update Catalog, which is public
+and needs no account. The option --download takes it from there, and gives
+the same image. Refer to the function download_driver_cab().
+
 The Windows driver and a capture of it were verified to yield a
 byte-identical image. The Linux library holds a different revision, which
 was also confirmed to boot the sensor.
@@ -38,8 +43,9 @@ Everything here is standard library: pcapng, USBPcap and the byte search
 through the driver binary are all parsed in this file.
 
 Usage:
-    ./ft9201-extract-firmware.py ftUsbWbioDriver.dll -o ft9201.bin
-    ./ft9201-extract-firmware.py capture.pcapng      -o ft9201.bin
+    ./ft9201-extract-firmware.py --download           -o ft9201.bin
+    ./ft9201-extract-firmware.py ftUsbWbioDriver.dll  -o ft9201.bin
+    ./ft9201-extract-firmware.py capture.pcapng       -o ft9201.bin
     sudo install -D -m 0644 ft9201.bin /lib/firmware/focaltech/ft9201.bin
 """
 
@@ -47,8 +53,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import re
 import struct
 import sys
+import tempfile
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 # pcapng block types we care about.
@@ -301,24 +312,175 @@ def extract(path: Path) -> bytes:
     return blob
 
 
+# ---------------------------------------------------------------------------
+# The Microsoft Update Catalog route
+# ---------------------------------------------------------------------------
+#
+# Microsoft publishes the same vendor driver in their Update Catalog. The
+# catalog is public: it needs no account, no licence key and no Windows
+# machine. Thus a Linux user can get the firmware with one command.
+#
+# This code does not redistribute the image. It only automates the steps
+# that a person does in a browser: a search, a download dialog, and then
+# the file itself. Other Linux tools use the same method for other
+# devices, for example b43-fwcutter for Broadcom.
+#
+# The three steps are:
+#   1. Search the catalog for the hardware ID of the sensor. Each result
+#      row has an update ID of 36 characters.
+#   2. Send that update ID to DownloadDialog.aspx. The answer holds the
+#      address of a .cab file on the servers of Windows Update.
+#   3. Get the .cab and take ftUsbWbioDriver.dll from it.
+
+CATALOG_SEARCH = ("https://www.catalog.update.microsoft.com/Search.aspx"
+                  "?q=USB%5CVID_2808%26PID_93A9")
+CATALOG_DIALOG = "https://catalog.update.microsoft.com/DownloadDialog.aspx"
+CATALOG_UA = "Mozilla/5.0 (X11; Linux x86_64)"
+CATALOG_TIMEOUT = 60
+DRIVER_MEMBER = "ftUsbWbioDriver.dll"
+
+
+def _http(url: str, data: bytes | None = None) -> bytes:
+    request = urllib.request.Request(url, data=data,
+                                     headers={"User-Agent": CATALOG_UA})
+    with urllib.request.urlopen(request, timeout=CATALOG_TIMEOUT) as response:
+        return response.read()
+
+
+def _catalog_update_ids(page: str) -> list[str]:
+    """Gives the update IDs of the result rows, in their order on the page."""
+    ids: list[str] = []
+    for match in re.finditer(r'id="([0-9a-f-]{36})_R\d+"', page):
+        if match.group(1) not in ids:
+            ids.append(match.group(1))
+    return ids
+
+
+def _catalog_cab_url(update_id: str) -> str | None:
+    """Gives the address of the .cab file for one update ID."""
+    payload = json.dumps([{"size": 0, "languages": "",
+                           "uidInfo": update_id, "updateID": update_id}])
+    body = urllib.parse.urlencode({"updateIDs": payload}).encode()
+    answer = _http(CATALOG_DIALOG, body).decode("utf-8", "replace")
+    found = re.search(r"https?://[^'\"]+\.cab", answer)
+    return found.group(0) if found else None
+
+
+def download_driver_cab(destination: Path) -> Path:
+    """Takes the vendor driver from the Microsoft Update Catalog.
+
+    Writes ftUsbWbioDriver.dll into the directory `destination` and gives
+    its path. Raises CaptureError when a step gives no result, because
+    each step depends on a page of Microsoft that can change.
+    """
+    print("searching the Microsoft Update Catalog for USB\\VID_2808&PID_93A9",
+          file=sys.stderr)
+    try:
+        page = _http(CATALOG_SEARCH).decode("utf-8", "replace")
+    except OSError as exc:
+        raise CaptureError(f"the catalog search failed: {exc}") from exc
+
+    update_ids = _catalog_update_ids(page)
+    if not update_ids:
+        raise CaptureError(
+            "the catalog gave no result for this hardware ID.\n"
+            "       Open " + CATALOG_SEARCH + " in a browser to see the\n"
+            "       reason, and use a local driver file instead.")
+    print(f"  found {len(update_ids)} catalog entries for this sensor",
+          file=sys.stderr)
+
+    cab_url = None
+    for update_id in update_ids[:5]:
+        try:
+            cab_url = _catalog_cab_url(update_id)
+        except OSError as exc:
+            raise CaptureError(f"the download dialog failed: {exc}") from exc
+        if cab_url:
+            break
+    if not cab_url:
+        raise CaptureError("the catalog gave no .cab address for this driver")
+
+    print(f"  downloading {cab_url.rsplit('/', 1)[-1]}", file=sys.stderr)
+    try:
+        cab_bytes = _http(cab_url)
+    except OSError as exc:
+        raise CaptureError(f"the download failed: {exc}") from exc
+    print(f"  the cabinet has {len(cab_bytes)} bytes", file=sys.stderr)
+
+    cab_path = destination / "ftUsbWbioDriver.cab"
+    cab_path.write_bytes(cab_bytes)
+    return _extract_cab_member(cab_path, DRIVER_MEMBER, destination)
+
+
+def _extract_cab_member(cab: Path, member: str, destination: Path) -> Path:
+    """Takes one file out of a cabinet, with the tools of the system.
+
+    Fedora and Debian supply cabextract. 7z and bsdtar also read a
+    cabinet. This function tries each of them, and gives a clear message
+    when the system has none.
+    """
+    import shutil
+    import subprocess
+
+    attempts = [
+        ("cabextract", ["cabextract", "-q", "-d", str(destination),
+                        "-F", member, str(cab)]),
+        ("7z", ["7z", "x", "-y", f"-o{destination}", str(cab), member]),
+        ("bsdtar", ["bsdtar", "-x", "-f", str(cab), "-C", str(destination),
+                    member]),
+    ]
+    for tool, command in attempts:
+        if not shutil.which(tool):
+            continue
+        subprocess.run(command, check=False, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        result = destination / member
+        if result.is_file():
+            return result
+
+    raise CaptureError(
+        "no tool of this system can open a Microsoft cabinet.\n"
+        "       Install one of cabextract, p7zip or bsdtar. On Fedora:\n"
+        "         sudo dnf install cabextract\n"
+        f"       The cabinet is at {cab}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Extract FT9201 MCU firmware from the vendor Windows "
                     "driver (ftUsbWbioDriver.dll) or from a USBPcap capture "
                     "of it running.")
-    parser.add_argument("source", type=Path,
+    parser.add_argument("source", type=Path, nargs="?",
                         help="ftUsbWbioDriver.dll, the vendor libfprint-2.so, "
-                             "or a .pcapng capture")
+                             "or a .pcapng capture. Omit it with --download.")
     parser.add_argument("-o", "--output", type=Path, default=Path("ft9201.bin"),
                         help="where to write the image (default: ft9201.bin)")
+    parser.add_argument("--download", action="store_true",
+                        help="take the vendor driver from the Microsoft "
+                             "Update Catalog, which is public and needs no "
+                             "Windows machine")
     args = parser.parse_args()
 
-    if not args.source.is_file():
+    if args.download and args.source is not None:
+        print("error: give a source file or --download, and not both",
+              file=sys.stderr)
+        return 1
+    if not args.download and args.source is None:
+        parser.print_usage(sys.stderr)
+        print("error: give a source file, or use --download", file=sys.stderr)
+        return 1
+
+    if not args.download and not args.source.is_file():
         print(f"error: {args.source} is not a file", file=sys.stderr)
         return 1
 
     try:
-        blob = extract(args.source)
+        if args.download:
+            with tempfile.TemporaryDirectory(prefix="ft9201-") as work:
+                driver = download_driver_cab(Path(work))
+                blob = extract(driver)
+        else:
+            blob = extract(args.source)
     except CaptureError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

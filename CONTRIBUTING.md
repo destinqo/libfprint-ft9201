@@ -30,7 +30,8 @@ The driver goes to libfprint. Thus it follows the rules of libfprint:
 ## The firmware
 
 This repository holds no firmware image, and it cannot hold one. The image
-is the property of FocalTech. The tool `ft9201-extract-firmware.py` takes
-the image from a vendor binary on your own machine. Do not send a firmware
+is the property of FocalTech. The tool `ft9201-extract-firmware.py` gets
+the image on your own machine: with `--download` from the public Microsoft
+Update Catalog, or from a local vendor binary. Do not send a firmware
 image, a USB capture of the vendor driver, or a fingerprint image to this
 repository.

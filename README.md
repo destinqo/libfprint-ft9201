@@ -24,9 +24,11 @@ patched proprietary `.so`, or a Secure Boot MOK enrolment.
   won. The largest correction is the MCU firmware download. The kernel
   driver has no such download, and its absence is the full explanation of
   the "needs a Windows machine" fault.
-- `./ft9201-extract-firmware.py`: takes the necessary firmware
-  image from a vendor binary or from a capture. Refer to "The MCU firmware".
-  **The driver does not operate without that image.**
+- `./ft9201-extract-firmware.py`: gets the necessary firmware image. With
+  `--download` it takes the vendor driver from the public Microsoft Update
+  Catalog, thus you need no Windows machine. It also accepts a local vendor
+  binary or a USB capture. Refer to "The MCU firmware". **The driver does
+  not operate without that image.**
 - `meson-integration.patch`: the small change to the `meson.build` files of
   libfprint that adds this driver to the build.
 
@@ -175,10 +177,35 @@ OUT endpoint `0x02`, each AFE register read gives `00 00 00 00`.
 
 The image is the property of the vendor. Therefore this project does not
 supply it, and you cannot distribute it. You must take it from a vendor
-binary. There are three methods. The extractor accepts each of them and
+binary. There are four methods. The extractor accepts each of them and
 identifies the type itself.
 
-**Method 1, from the Windows driver binary.** The image is in the file
+**Method 1, and the one to use: let the extractor get the driver.** You
+need no Windows machine, no account and no vendor file:
+
+```bash
+./ft9201-extract-firmware.py --download -o ft9201.bin
+sudo install -D -m 0644 ft9201.bin /lib/firmware/focaltech/ft9201.bin
+```
+
+Microsoft publishes the same vendor driver in their Update Catalog, which
+is public. The extractor searches that catalog for the hardware ID
+`USB\VID_2808&PID_93A9`, takes the cabinet file, and reads the firmware
+from the driver in it. The result is the image `0999f2f4...`, which is the
+image that the tests on the hardware used. The three methods below give
+the same result from a local file.
+
+This method needs a tool that opens a Microsoft cabinet:
+
+```bash
+sudo dnf install cabextract      # Fedora
+sudo apt install cabextract      # Debian and Ubuntu
+```
+
+The extractor also accepts `p7zip` or `bsdtar` for this step. It tells you
+when the system has none of them.
+
+**Method 2, from the Windows driver binary.** The image is in the file
 `ftUsbWbioDriver.dll`. You need only that one file from a Windows
 installation. You do not need a capture:
 
@@ -204,7 +231,7 @@ and does not add zeros, because the tests confirmed that form. The second
 image differs only in its link addresses. It is probably for one of the
 other AFE types (`0x9338` or `0x9536`).
 
-**Method 2, from the Linux driver of FocalTech.** You do not need a Windows
+**Method 3, from the Linux driver of FocalTech.** You do not need a Windows
 machine for this method. Their proprietary driver is a complete libfprint
 build with their driver in it. It is available to the public, and it holds a
 firmware image:
@@ -223,7 +250,7 @@ The image size is the one condition that helps this sensor. Therefore use
 the copy from the Windows driver if you can get it. The extractor identifies
 both revisions and tells you which one you have.
 
-**Method 3, from a USB capture.** Use this method when you have no binary.
+**Method 4, from a USB capture.** Use this method when you have no binary.
 It also shows the image that one machine sends:
 
 ```bash
@@ -234,9 +261,8 @@ The extractor reads pcapng and USBPcap itself. It needs no `tshark` and no
 other Python module. Each method gives the SHA-256 of the image, and tells
 you if it agrees with the image that this project confirmed (`0999f2f4...`,
 10368 bytes). A capture of more than one connection holds more than one
-copy, and the extractor makes sure that the copies agree. **Method 1 and
-method 3 give the same image**, which is also a good check of the
-extraction.
+copy, and the extractor makes sure that the copies agree. **Each method
+gives the same image**, which is also a good check of the extraction.
 
 Do not give the file `ftWbioEngineAdapter.dll` to the extractor. That file
 is the matcher and holds no firmware. The extractor tells you this.
