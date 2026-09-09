@@ -34,19 +34,39 @@ They all need write access to the USB device, so run them under `sudo`.
 
 ## Offline analysis, no hardware needed
 
-- **`ft9201-matcher.c`** — **outdated.** This is the whole-frame correlation
-  matcher the driver used before it was rewritten around keypoints and
-  RANSAC; correlation was measured to overlap between fingers and was
-  dropped. Kept only because the evaluation harness around it (similarity
-  matrix, FRR/FAR table, directory-based labels) is still useful; port the
-  driver's current `ft9201_features_new`/`ft9201_match_pair` into it if you
-  want to evaluate the real matcher offline. Builds with just
-  `-lm`. Prints the full similarity matrix plus same-group/different-group
-  statistics and an FRR/FAR table, grouping frames by their parent directory:
-  `./ft9201-matcher dirA/*.pgm dirB/*.pgm`
-  **This is the program to use when validating `FT9201_MATCH_THRESHOLD`.**
-  Capture several frames of one finger into one directory and several of
-  another finger into a second, and read the table.
+- **`ft9201-matcher.c`** — measures the matcher of the driver on saved
+  frames. **This is the program to use when validating
+  `FT9201_MATCH_THRESHOLD`.** No hardware is needed.
+
+  The program holds no copy of the matcher. `extract-matcher.sh` takes the
+  matcher out of `focaltech_ft9201.c` between the section markers
+  `/****** MATCHER ******/` and `/****** TEMPLATE STORAGE ******/`, and
+  writes `ft9201-matcher-impl.inc`. The harness includes that file. An
+  earlier version held a copy, and that copy became old: it measured the
+  whole-frame correlation that the driver dropped.
+
+  ```bash
+  ./extract-matcher.sh
+  gcc -O2 -Wall -Wextra -o ft9201-matcher ft9201-matcher.c \
+      $(pkg-config --cflags --libs glib-2.0) -lm
+  ./ft9201-matcher  fingerA/frame*.pgm  fingerB/frame*.pgm
+  ```
+
+  Put the frames of one finger in one directory. The name of the parent
+  directory gives the group. The program prints four results:
+
+  1. the score of each pair, with the number of the keypoints per frame,
+  2. the statistics of the same-finger and different-finger groups,
+  3. the error rates against the threshold, for the operation of the
+     driver — each frame against a template of the other frames of its
+     group, with the second-best rule of `ft9201_match_template`,
+  4. the error rate against the number of the frames in the template. This
+     answers the question if `FT9201_ENROLL_STAGES` is large enough.
+
+  **Collect the frames as the sensor is used.** Put the finger down the
+  same way each time. Do not change the position on purpose. The sensor is
+  3 x 4 mm, thus a changed position records a different area of the same
+  finger, and two different areas do not correlate.
 - **`minutiae-sweep.c`** — runs libfprint's own NBIS minutiae detector over
   frames with every combination of image flags, `ppmm` and 1x–4x upscaling.
   This is what established that a 96x96 frame yields 1–2 minutiae no matter
@@ -59,9 +79,9 @@ They all need write access to the USB device, so run them under `sudo`.
       $(pkg-config --cflags glib-2.0 gio-2.0 gusb pixman-1) \
       -L$L/build/libfprint -lfprint-2 \
       $(pkg-config --libs glib-2.0 gio-2.0 gobject-2.0 pixman-1)
-  LD_LIBRARY_PATH=$L/build/libfprint ./minutiae-sweep /path/to/frames/*.pgm
+  LD_LIBRARY_PATH=$L/build/libfprint ./minutiae-sweep ../samples/*.pgm
   ```
-- **`enhance.py`** — writes enhanced variants of captured frames
+- **`enhance.py`** — writes enhanced variants of the sample frames
   (histogram equalisation, CLAHE, unsharp, ridge band-pass and combinations)
   so `minutiae-sweep` can be run over each. Produced the negative result that
   enhancement raises the minutiae count only from 1.1 to 1.5.

@@ -1,329 +1,365 @@
-/* Open small-area fingerprint matcher for the FT9201, written to be lifted
- * into the libfprint driver as-is.
+/*
+ * Offline evaluation of the FT9201 matcher.
  *
- * Why not minutiae: a 96x96 frame from this sensor yields 1-2 minutiae and
- * NBIS/bozorth3 refuses to score fewer than 10, so the minutiae route cannot
- * work here at all. What does work on a small area is comparing the ridge
- * pattern itself: band-pass the frame to the ridge frequency, mask off the
- * part of the sensor the finger is not touching, and take the best
- * normalised cross-correlation over a search in translation and rotation.
+ * The program reads PGM frames, and it groups them by the name of their
+ * parent directory. Each group is one finger. It then measures the matcher
+ * of the driver on those frames, and it prints three results:
  *
- * Nothing here is derived from any vendor binary; it is the standard
- * correlation approach for small-area sensors.
+ *   1. the matrix of the scores of each pair,
+ *   2. the statistics of the same-finger and different-finger groups,
+ *   3. a table of the error rates against the threshold.
  *
- * Standalone driver for evaluation:
- *   gcc -O2 -o ft9201-matcher ft9201-matcher.c -lm
- *   ./ft9201-matcher <dir-of-pgms> [more dirs...]
+ * The third table shows the threshold that the driver must use. Refer to
+ * FT9201_MATCH_THRESHOLD in the driver.
+ *
+ * The program does not hold a copy of the matcher. The file
+ * ft9201-matcher-impl.inc holds the code of the driver, and the script
+ * extract-matcher.sh writes that file. Thus the harness cannot measure an
+ * old algorithm.
+ *
+ * Build:
+ *   ./extract-matcher.sh
+ *   gcc -O2 -o ft9201-matcher ft9201-matcher.c $(pkg-config --cflags --libs glib-2.0) -lm
+ *
+ * Use:
+ *   ./ft9201-matcher  fingerA/frame01.pgm ...  fingerB/frame01.pgm ...
+ *
+ * Copyright (C) 2026 Miroslav Baranko <miroslav.baranko@upjs.sk>
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+
+#include <glib.h>
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 
-/* ---------- the matcher: plain C, no dependencies beyond libm ---------- */
+#include "ft9201-matcher-impl.inc"
 
-#define FT9201_MATCH_MAX_DIM   128
-#define FT9201_MATCH_MAX_PX    (FT9201_MATCH_MAX_DIM * FT9201_MATCH_MAX_DIM)
+/* The threshold that the tables 3 and 4 use. It is the default of the
+ * driver. Refer to FT9201_MATCH_THRESHOLD. */
+#define EVAL_THRESHOLD 0.06f
 
-/* Ridge wavelength in pixels, measured on this sensor: 9.6-13.7 across 23
- * frames, median 10.7. The band-pass is centred here. */
-#define FT9201_RIDGE_PERIOD    10.7f
-
-/* Search bounds. Presses land within a few pixels of each other on a sensor
- * this small, so a wide search only adds false-accept risk and cost. */
-#define FT9201_MATCH_MAX_SHIFT 12
-#define FT9201_MATCH_SHIFT_STEP 2
-#define FT9201_MATCH_MAX_ANGLE 9
-#define FT9201_MATCH_ANGLE_STEP 3
-
-/* A pose is only scored if the two finger masks overlap by at least this
- * fraction of the smaller mask -- otherwise a tiny well-correlated corner
- * could score high. */
-#define FT9201_MATCH_MIN_OVERLAP 0.35f
+#define MAX_FRAMES 128
+#define MAX_DIM    128
 
 typedef struct
 {
-  int   w, h;
-  float filtered[FT9201_MATCH_MAX_PX];
-  unsigned char mask[FT9201_MATCH_MAX_PX];
-  int   mask_count;
-} Ft9201Features;
+  char            name[256];
+  char            group[128];
+  guint8          px[MAX_DIM * MAX_DIM];
+  gint            w, h;
+  Ft9201Features *feat;
+} Frame;
 
-/* Separable Gaussian blur with edge clamping. */
-static void
-ft9201_blur (const float *src, float *dst, int w, int h, float sigma)
-{
-#define FT9201_BLUR_MAX_R 24
-  int r = (int) (3.0f * sigma + 0.5f);
-  if (r < 1) { memcpy (dst, src, sizeof (float) * w * h); return; }
-  if (r > FT9201_BLUR_MAX_R) r = FT9201_BLUR_MAX_R;
-  float k[2 * FT9201_BLUR_MAX_R + 1];
-  float sum = 0.0f;
-  for (int i = -r; i <= r; i++)
-    { k[i + r] = expf (-(i * i) / (2.0f * sigma * sigma)); sum += k[i + r]; }
-  for (int i = 0; i <= 2 * r; i++) k[i] /= sum;
-
-  static float tmp[FT9201_MATCH_MAX_PX];
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++)
-      {
-        float a = 0.0f;
-        for (int i = -r; i <= r; i++)
-          {
-            int xx = x + i;
-            if (xx < 0) xx = 0; else if (xx >= w) xx = w - 1;
-            a += k[i + r] * src[y * w + xx];
-          }
-        tmp[y * w + x] = a;
-      }
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++)
-      {
-        float a = 0.0f;
-        for (int i = -r; i <= r; i++)
-          {
-            int yy = y + i;
-            if (yy < 0) yy = 0; else if (yy >= h) yy = h - 1;
-            /* second pass reads the first pass, not the input */
-            a += k[i + r] * tmp[yy * w + x];
-          }
-        dst[y * w + x] = a;
-      }
-}
-
-/* Band-pass around the ridge frequency, as a difference of Gaussians. This
- * removes the illumination gradient and the fine noise, leaving the ridges. */
-static void
-ft9201_ridge_filter (const float *in, float *out, int w, int h)
-{
-  static float lo[FT9201_MATCH_MAX_PX], hi[FT9201_MATCH_MAX_PX];
-  ft9201_blur (in, hi, w, h, FT9201_RIDGE_PERIOD / 6.0f);
-  ft9201_blur (in, lo, w, h, FT9201_RIDGE_PERIOD / 2.0f);
-  for (int i = 0; i < w * h; i++)
-    out[i] = hi[i] - lo[i];
-}
-
-/* Where is the finger? Ridge energy, smoothed, above a fraction of its mean. */
-static void
-ft9201_finger_mask (const float *f, unsigned char *mask, int *count,
-                    int w, int h)
-{
-  static float energy[FT9201_MATCH_MAX_PX], sm[FT9201_MATCH_MAX_PX];
-  for (int i = 0; i < w * h; i++) energy[i] = f[i] * f[i];
-  ft9201_blur (energy, sm, w, h, FT9201_RIDGE_PERIOD / 2.0f);
-  double mean = 0.0;
-  for (int i = 0; i < w * h; i++) mean += sm[i];
-  mean /= (w * h);
-  int n = 0;
-  for (int i = 0; i < w * h; i++)
-    { mask[i] = sm[i] > 0.30 * mean; n += mask[i]; }
-  *count = n;
-}
-
-static void
-ft9201_features (const unsigned char *img, int w, int h, Ft9201Features *out)
-{
-  static float f[FT9201_MATCH_MAX_PX];
-  out->w = w; out->h = h;
-  for (int i = 0; i < w * h; i++) f[i] = (float) img[i];
-  ft9201_ridge_filter (f, out->filtered, w, h);
-  ft9201_finger_mask (out->filtered, out->mask, &out->mask_count, w, h);
-}
-
-/* Rotate an 8-bit image about its centre, bilinear, zero outside. */
-static void
-ft9201_rotate (const unsigned char *src, unsigned char *dst,
-               int w, int h, float deg)
-{
-  if (deg == 0.0f) { memcpy (dst, src, (size_t) w * h); return; }
-  float t = deg * (float) M_PI / 180.0f;
-  float c = cosf (t), s = sinf (t);
-  float cy = (h - 1) / 2.0f, cx = (w - 1) / 2.0f;
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++)
-      {
-        float dy = y - cy, dx = x - cx;
-        float sy = dy * c + dx * s + cy;
-        float sx = -dy * s + dx * c + cx;
-        int y0 = (int) floorf (sy), x0 = (int) floorf (sx);
-        if (y0 < 0 || x0 < 0 || y0 >= h - 1 || x0 >= w - 1)
-          { dst[y * w + x] = 0; continue; }
-        float fy = sy - y0, fx = sx - x0;
-        float v = (1 - fy) * ((1 - fx) * src[y0 * w + x0] + fx * src[y0 * w + x0 + 1])
-                  +    fy  * ((1 - fx) * src[(y0 + 1) * w + x0] + fx * src[(y0 + 1) * w + x0 + 1]);
-        dst[y * w + x] = (unsigned char) (v + 0.5f);
-      }
-}
-
-/* Masked normalised cross-correlation of b shifted by (dy,dx) onto a. */
-static float
-ft9201_ncc (const Ft9201Features *a, const Ft9201Features *b, int dy, int dx)
-{
-  int w = a->w, h = a->h;
-  double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
-  int n = 0;
-  for (int y = 0; y < h; y++)
-    {
-      int by = y + dy;
-      if (by < 0 || by >= h) continue;
-      for (int x = 0; x < w; x++)
-        {
-          int bx = x + dx;
-          if (bx < 0 || bx >= w) continue;
-          int ia = y * w + x, ib = by * w + bx;
-          if (!a->mask[ia] || !b->mask[ib]) continue;
-          float va = a->filtered[ia], vb = b->filtered[ib];
-          sa += va; sb += vb; saa += (double) va * va;
-          sbb += (double) vb * vb; sab += (double) va * vb;
-          n++;
-        }
-    }
-  int smaller = a->mask_count < b->mask_count ? a->mask_count : b->mask_count;
-  if (n < 200 || n < FT9201_MATCH_MIN_OVERLAP * smaller)
-    return -1.0f;
-  double na = saa - sa * sa / n, nb = sbb - sb * sb / n;
-  if (na <= 1e-9 || nb <= 1e-9) return -1.0f;
-  return (float) ((sab - sa * sb / n) / sqrt (na * nb));
-}
-
-/* Best score of probe against gallery over rotation and translation. */
-static float
-ft9201_match_score (const unsigned char *gallery, const unsigned char *probe,
-                    int w, int h)
-{
-  static Ft9201Features fg, fp;
-  static unsigned char rot[FT9201_MATCH_MAX_PX];
-  ft9201_features (gallery, w, h, &fg);
-
-  float best = -1.0f;
-  int best_dy = 0, best_dx = 0; float best_deg = 0.0f;
-
-  for (int deg = -FT9201_MATCH_MAX_ANGLE; deg <= FT9201_MATCH_MAX_ANGLE;
-       deg += FT9201_MATCH_ANGLE_STEP)
-    {
-      ft9201_rotate (probe, rot, w, h, (float) deg);
-      ft9201_features (rot, w, h, &fp);
-      for (int dy = -FT9201_MATCH_MAX_SHIFT; dy <= FT9201_MATCH_MAX_SHIFT;
-           dy += FT9201_MATCH_SHIFT_STEP)
-        for (int dx = -FT9201_MATCH_MAX_SHIFT; dx <= FT9201_MATCH_MAX_SHIFT;
-             dx += FT9201_MATCH_SHIFT_STEP)
-          {
-            float s = ft9201_ncc (&fg, &fp, dy, dx);
-            if (s > best) { best = s; best_dy = dy; best_dx = dx; best_deg = deg; }
-          }
-    }
-
-  /* Refine around the best pose. */
-  for (float deg = best_deg - 2.0f; deg <= best_deg + 2.0f; deg += 1.0f)
-    {
-      ft9201_rotate (probe, rot, w, h, deg);
-      ft9201_features (rot, w, h, &fp);
-      for (int dy = best_dy - 2; dy <= best_dy + 2; dy++)
-        for (int dx = best_dx - 2; dx <= best_dx + 2; dx++)
-          {
-            float s = ft9201_ncc (&fg, &fp, dy, dx);
-            if (s > best) best = s;
-          }
-    }
-  return best;
-}
-
-/* ---------- evaluation harness (not part of the driver) ---------- */
-
-typedef struct { char name[256]; int label; unsigned char px[FT9201_MATCH_MAX_PX]; int w, h; } Frame;
-
-static int
+static gboolean
 load_pgm (const char *path, Frame *f)
 {
   FILE *fh = fopen (path, "rb");
-  if (!fh) return 0;
-  char magic[3] = {0};
+  char magic[3] = { 0 };
   int w, h, maxv;
+
+  if (fh == NULL)
+    return FALSE;
+
   if (fscanf (fh, "%2s %d %d %d", magic, &w, &h, &maxv) != 4 ||
-      strcmp (magic, "P5") || w > FT9201_MATCH_MAX_DIM || h > FT9201_MATCH_MAX_DIM)
-    { fclose (fh); return 0; }
+      strcmp (magic, "P5") != 0 || maxv != 255 ||
+      w < 1 || h < 1 || w > MAX_DIM || h > MAX_DIM)
+    {
+      fclose (fh);
+      return FALSE;
+    }
+
   fgetc (fh);
-  if (fread (f->px, 1, (size_t) w * h, fh) != (size_t) w * h) { fclose (fh); return 0; }
-  f->w = w; f->h = h;
+  if (fread (f->px, 1, (size_t) w * h, fh) != (size_t) w * h)
+    {
+      fclose (fh);
+      return FALSE;
+    }
+
+  f->w = w;
+  f->h = h;
   fclose (fh);
-  return 1;
+  return TRUE;
+}
+
+/* Writes the name of the parent directory of the path to the group. Frames
+ * of one finger must be in one directory. */
+static void
+group_of (const char *path, char *out, gsize outlen)
+{
+  const char *slash = strrchr (path, '/');
+  char dir[256];
+  gsize len;
+
+  if (slash == NULL)
+    {
+      g_strlcpy (out, ".", outlen);
+      return;
+    }
+
+  len = (gsize) (slash - path);
+  if (len >= sizeof dir)
+    len = sizeof dir - 1;
+  memcpy (dir, path, len);
+  dir[len] = '\0';
+
+  slash = strrchr (dir, '/');
+  g_strlcpy (out, slash != NULL ? slash + 1 : dir, outlen);
+}
+
+/*
+ * Gives the score of one probe against a template of the other frames of
+ * its group. This is the operation of the driver. The driver takes the
+ * second best score of the template, thus a single lucky frame cannot
+ * accept a finger.
+ */
+static gfloat
+score_against_group (Frame *frames, gint n, gint probe, const char *group)
+{
+  g_autoptr (GPtrArray) tpl =
+    g_ptr_array_new_with_free_func ((GDestroyNotify) g_bytes_unref);
+  gfloat score;
+
+  /* ft9201_match_template reads GBytes, and not a raw pointer. */
+  for (gint i = 0; i < n; i++)
+    if (i != probe && strcmp (frames[i].group, group) == 0)
+      g_ptr_array_add (tpl,
+                       g_bytes_new (frames[i].px,
+                                    (gsize) frames[i].w * frames[i].h));
+
+  if (tpl->len < 2)
+    return -1.0f;
+
+  score = ft9201_match_template (tpl, frames[probe].px,
+                                 frames[probe].w, frames[probe].h);
+  return score;
 }
 
 int
 main (int argc, char **argv)
 {
-  static Frame frames[128];
-  int n = 0;
-  for (int a = 1; a < argc && n < 128; a++)
+  static Frame frames[MAX_FRAMES];
+  static gfloat matrix[MAX_FRAMES][MAX_FRAMES];
+  gint n = 0;
+
+  if (argc < 3)
     {
-      if (!load_pgm (argv[a], &frames[n])) { fprintf (stderr, "skip %s\n", argv[a]); continue; }
-      snprintf (frames[n].name, sizeof frames[n].name, "%s", argv[a]);
-      /* label = the directory component, so same-finger sets can be grouped */
-      frames[n].label = 0;
-      const char *slash = strrchr (argv[a], '/');
-      if (slash)
+      fprintf (stderr,
+               "usage: %s  fingerA/frame*.pgm  fingerB/frame*.pgm\n"
+               "The parent directory of each frame gives its group.\n",
+               argv[0]);
+      return 2;
+    }
+
+  for (gint a = 1; a < argc && n < MAX_FRAMES; a++)
+    {
+      if (!load_pgm (argv[a], &frames[n]))
         {
-          char dir[256]; size_t len = slash - argv[a];
-          if (len >= sizeof dir) len = sizeof dir - 1;
-          memcpy (dir, argv[a], len); dir[len] = 0;
-          const char *d2 = strrchr (dir, '/');
-          const char *tag = d2 ? d2 + 1 : dir;
-          for (const char *c = tag; *c; c++) frames[n].label = frames[n].label * 31 + *c;
+          fprintf (stderr, "skip %s\n", argv[a]);
+          continue;
+        }
+      g_strlcpy (frames[n].name, argv[a], sizeof frames[n].name);
+      group_of (argv[a], frames[n].group, sizeof frames[n].group);
+      frames[n].feat = ft9201_features_new (frames[n].px,
+                                            frames[n].w, frames[n].h);
+      if (frames[n].feat == NULL)
+        {
+          fprintf (stderr, "no features: %s\n", argv[a]);
+          continue;
         }
       n++;
     }
-  printf ("%d frames\n\n", n);
 
-  printf ("%-28s", "");
-  for (int j = 0; j < n; j++) printf ("%5d", j + 1);
+  printf ("%d frames\n", n);
+  for (gint i = 0; i < n; i++)
+    printf ("  %2d %-30s group=%-12s keypoints=%u\n", i + 1,
+            strrchr (frames[i].name, '/') ?
+            strrchr (frames[i].name, '/') + 1 : frames[i].name,
+            frames[i].group, frames[i].feat->n);
   printf ("\n");
-  static float M[128][128];
-  for (int i = 0; i < n; i++)
+
+  /* 1. the matrix of the scores of each pair */
+  printf ("pair scores\n%-26s", "");
+  for (gint j = 0; j < n; j++)
+    printf ("%6d", j + 1);
+  printf ("\n");
+
+  for (gint i = 0; i < n; i++)
     {
       const char *base = strrchr (frames[i].name, '/');
-      printf ("%2d %-25s", i + 1, base ? base + 1 : frames[i].name);
-      for (int j = 0; j < n; j++)
+
+      printf ("%2d %-23s", i + 1, base ? base + 1 : frames[i].name);
+      for (gint j = 0; j < n; j++)
         {
-          M[i][j] = (i == j) ? 1.0f
-                    : ft9201_match_score (frames[i].px, frames[j].px,
-                                          frames[i].w, frames[i].h);
-          printf ("%5.2f", M[i][j]);
+          matrix[i][j] = (i == j) ? 1.0f :
+                         ft9201_match_pair (frames[i].feat, frames[j].feat);
+          printf ("%6.3f", (gdouble) matrix[i][j]);
         }
       printf ("\n");
     }
 
-  /* same-label vs different-label statistics */
-  double smin = 2, smax = -2, ssum = 0; int sn = 0;
-  double dmin = 2, dmax = -2, dsum = 0; int dn = 0;
-  for (int i = 0; i < n; i++)
-    for (int j = i + 1; j < n; j++)
-      {
-        float v = (M[i][j] + M[j][i]) / 2.0f;
-        if (frames[i].label == frames[j].label)
-          { sn++; ssum += v; if (v < smin) smin = v; if (v > smax) smax = v; }
-        else
-          { dn++; dsum += v; if (v < dmin) dmin = v; if (v > dmax) dmax = v; }
-      }
-  if (sn) printf ("\nsame group   n=%3d  mean %.2f  min %.2f  max %.2f\n",
-                  sn, ssum / sn, smin, smax);
-  if (dn) printf ("diff group   n=%3d  mean %.2f  min %.2f  max %.2f\n",
-                  dn, dsum / dn, dmin, dmax);
-  if (sn && dn)
-    {
-      printf ("\n threshold   FRR(same rejected)   FAR(diff accepted)\n");
-      for (float t = 0.20f; t <= 0.65f; t += 0.05f)
+  /* 2. the statistics of the two groups */
+  {
+    gdouble smin = 2, smax = -2, ssum = 0;
+    gdouble dmin = 2, dmax = -2, dsum = 0;
+    gint sn = 0, dn = 0;
+
+    for (gint i = 0; i < n; i++)
+      for (gint j = i + 1; j < n; j++)
         {
-          int fr = 0, fa = 0;
-          for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-              {
-                float v = (M[i][j] + M[j][i]) / 2.0f;
-                if (frames[i].label == frames[j].label) fr += (v < t);
-                else fa += (v >= t);
-              }
-          printf ("   %.2f        %5.1f%%              %5.1f%%\n",
-                  t, 100.0 * fr / sn, 100.0 * fa / dn);
+          gfloat v = (matrix[i][j] + matrix[j][i]) / 2.0f;
+
+          if (strcmp (frames[i].group, frames[j].group) == 0)
+            {
+              sn++;
+              ssum += v;
+              if (v < smin) smin = v;
+              if (v > smax) smax = v;
+            }
+          else
+            {
+              dn++;
+              dsum += v;
+              if (v < dmin) dmin = v;
+              if (v > dmax) dmax = v;
+            }
         }
-    }
+
+    if (sn > 0)
+      printf ("\nsame finger        n=%3d  mean %.3f  min %.3f  max %.3f\n",
+              sn, ssum / sn, smin, smax);
+    if (dn > 0)
+      printf ("different finger   n=%3d  mean %.3f  min %.3f  max %.3f\n",
+              dn, dsum / dn, dmin, dmax);
+    if (sn > 0 && dn > 0 && smin > dmax)
+      printf ("the two groups do not touch: %.3f to %.3f is free\n",
+              dmax, smin);
+  }
+
+  /* 3. the error rates of the operation of the driver */
+  {
+    static gfloat genuine[MAX_FRAMES];
+    static gfloat impostor[MAX_FRAMES * 8];
+    gint gn = 0, in = 0;
+
+    for (gint i = 0; i < n; i++)
+      {
+        gfloat s = score_against_group (frames, n, i, frames[i].group);
+
+        if (s >= 0.0f && gn < MAX_FRAMES)
+          genuine[gn++] = s;
+
+        for (gint j = 0; j < n; j++)
+          {
+            if (strcmp (frames[j].group, frames[i].group) == 0)
+              continue;
+            s = score_against_group (frames, n, i, frames[j].group);
+            if (s >= 0.0f && in < MAX_FRAMES * 8)
+              impostor[in++] = s;
+            break;
+          }
+      }
+
+    if (gn > 0 && in > 0)
+      {
+        printf ("\nthe operation of the driver: each frame against a "
+                "template of the other frames\n");
+        printf ("  genuine   n=%3d\n  impostor  n=%3d\n", gn, in);
+        printf ("\n threshold   FRR (correct finger rejected)   "
+                "FAR (different finger accepted)\n");
+        for (gfloat t = 0.02f; t <= 0.402f; t += 0.02f)
+          {
+            gint fr = 0, fa = 0;
+
+            for (gint i = 0; i < gn; i++)
+              fr += (genuine[i] < t);
+            for (gint i = 0; i < in; i++)
+              fa += (impostor[i] >= t);
+
+            printf ("   %.2f       %6.1f%% (%2d/%2d)              "
+                    "%6.1f%% (%2d/%2d)\n",
+                    (gdouble) t, 100.0 * fr / gn, fr, gn,
+                    100.0 * fa / in, fa, in);
+          }
+      }
+    else
+      {
+        printf ("\nthe error-rate table needs two groups, and three or "
+                "more frames in each group\n");
+      }
+  }
+
+  /* 4. the effect of the number of the enrolment frames */
+  {
+    const char *big = NULL;
+    gint bign = 0;
+
+    for (gint i = 0; i < n; i++)
+      {
+        gint c = 0;
+
+        for (gint j = 0; j < n; j++)
+          if (strcmp (frames[j].group, frames[i].group) == 0)
+            c++;
+        if (c > bign)
+          {
+            bign = c;
+            big = frames[i].group;
+          }
+      }
+
+    if (big != NULL && bign >= 4)
+      {
+        printf ("\nthe number of the enrolment frames, group %s, "
+                "threshold %.2f\n", big, (gdouble) EVAL_THRESHOLD);
+        printf ("  frames in template   FRR (correct finger rejected)\n");
+
+        for (gint k = 2; k < bign; k++)
+          {
+            gint tries = 0, rejected = 0;
+
+            /* Each probe of the group gets a template of the k frames that
+             * follow it. Thus each frame gives one measurement. */
+            for (gint p = 0; p < n; p++)
+              {
+                g_autoptr (GPtrArray) tpl = NULL;
+                gfloat s;
+
+                if (strcmp (frames[p].group, big) != 0)
+                  continue;
+
+                tpl = g_ptr_array_new_with_free_func (
+                  (GDestroyNotify) g_bytes_unref);
+                for (gint step = 1; step < n && (gint) tpl->len < k; step++)
+                  {
+                    gint q = (p + step) % n;
+
+                    if (strcmp (frames[q].group, big) != 0)
+                      continue;
+                    g_ptr_array_add (tpl,
+                                     g_bytes_new (frames[q].px,
+                                                  (gsize) frames[q].w *
+                                                  frames[q].h));
+                  }
+                if ((gint) tpl->len < k)
+                  continue;
+
+                s = ft9201_match_template (tpl, frames[p].px,
+                                           frames[p].w, frames[p].h);
+                tries++;
+                if (s < EVAL_THRESHOLD)
+                  rejected++;
+              }
+
+            if (tries > 0)
+              printf ("        %2d             %6.1f%% (%2d/%2d)\n",
+                      k, 100.0 * rejected / tries, rejected, tries);
+          }
+      }
+  }
+
+  for (gint i = 0; i < n; i++)
+    ft9201_features_free (frames[i].feat);
+
   return 0;
 }
