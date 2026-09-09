@@ -257,6 +257,85 @@ template increases the distance between the two groups. Do the test again
 with more fingers and more persons before you use this sensor as the only
 authentication factor.
 
+### The measurement of 2026-09-09, on 13 fingers
+
+A second measurement used a real collection instead of frames from a
+Windows session. Five persons of one house gave 13 different fingers, and
+each finger gave 9 or 10 presses. That is 128 frames, all with natural
+placement. The tool `tools/collect-finger.sh` collected them.
+
+One frame against one frame:
+
+| | n | mean | max |
+|---|---|---|---|
+| correct finger | 567 | 0.146 | 0.797 |
+| different finger | 7561 | 0.007 | 0.047 |
+
+The operation of the driver, which scores one frame against a template and
+takes the second best score:
+
+| | n | mean | sd | median | p95 | p99 | max |
+|---|---|---|---|---|---|---|---|
+| correct finger | 128 | 0.260 | 0.145 | 0.260 | 0.512 | 0.593 | 0.593 |
+| different finger | 1536 | 0.017 | 0.012 | 0.023 | 0.027 | 0.031 | **0.038** |
+
+| | |
+|---|---|
+| equal error rate | **4.69 %** at the threshold 0.027 |
+| separation `d'` | **2.36** |
+| at the threshold 0.08 | 10.9 % incorrect reject, **0 incorrect accept of 1536** |
+
+**0 incorrect accept operations in 1536 comparisons gives an upper limit of
+approximately 0.2 % at 95 % confidence.** The earlier measurement used 5
+comparisons and gave approximately 45 %.
+
+**The rule of the second best score does work.** The largest score of a
+different finger is 0.047 for one frame against one frame, but only 0.038
+for the operation of the driver. A single lucky pair does not accept a
+finger, because the driver needs two frames of the template to agree.
+
+The threshold moved from 0.06 to 0.08 for this reason. Both values give 0
+incorrect accept operations, and 0.08 costs one more incorrect reject
+operation in 128 attempts. But 0.08 keeps a distance of 2.1 times to the
+largest score of a different finger, where 0.06 keeps 1.6 times. An
+estimate from 5 persons is optimistic, thus the distance is worth more.
+
+### The difference is between persons, and not between an adult and a child
+
+The mean score of each finger against its own group:
+
+| finger | mean | | finger | mean |
+|---|---|---|---|---|
+| person B, right index | 0.345 | | person D, right index | 0.113 |
+| person A, right thumb | 0.227 | | **child, left index** | **0.106** |
+| person B, left index | 0.212 | | person A, right middle | 0.103 |
+| person D, right index | 0.176 | | person C, right index | 0.090 |
+| person A, right index | 0.146 | | person C, left index | 0.083 |
+| person A, left middle | 0.123 | | **child, right index** | **0.082** |
+| | | | person A, left thumb | **0.056** |
+
+The two fingers of the child are in the middle of that list, and both are
+better than the left thumb of an adult. `FT9201_RIDGE_PERIOD` is 10.7
+pixels, and a measurement of 23 frames of adult fingers gave that value. A
+child has finer ridges, thus the value could be incorrect for a child. This
+measurement shows that it is not.
+
+The difference between the best finger and the worst is 6 times, and it
+follows the person and the finger, not the age.
+
+### Why the incorrect reject rate is an upper limit
+
+Six frames of 128 score less than 0.05 against every other frame of their
+own finger. A frame like that is a bad press, a finger that is not on the
+centre of the sensor, or a frame of the wrong finger. The score alone does
+not separate those causes.
+
+Only one frame came out of the set: the person who collected the frames saw
+the first press of one finger go to a different finger. The other five stay
+in, because a bad press and a press that is not on the centre are normal
+use and belong in the rate. A collection that removes each frame with a low
+score measures its own selection, and not the sensor.
+
 ## What other projects measured
 
 - **`Dgmtnz/ft9201-fingerprint-linux`** recalibrated a correlation matcher

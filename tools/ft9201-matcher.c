@@ -39,7 +39,7 @@
  * driver. Refer to FT9201_MATCH_THRESHOLD. */
 #define EVAL_THRESHOLD 0.06f
 
-#define MAX_FRAMES 128
+#define MAX_FRAMES 512
 #define MAX_DIM    128
 
 typedef struct
@@ -135,6 +135,63 @@ score_against_group (Frame *frames, gint n, gint probe, const char *group)
   return score;
 }
 
+/* Gives the mean, the standard deviation and three percentiles of one set
+ * of scores. A security parameter needs more than a mean and a maximum. */
+static int
+cmp_float (const void *a, const void *b)
+{
+  gfloat x = *(const gfloat *) a, y = *(const gfloat *) b;
+
+  return (x > y) - (x < y);
+}
+
+static gfloat
+mean_of (const gfloat *v, gint n)
+{
+  gdouble s = 0;
+
+  for (gint i = 0; i < n; i++)
+    s += v[i];
+  return (gfloat) (s / n);
+}
+
+static gfloat
+sd_of (const gfloat *v, gint n)
+{
+  gdouble m = mean_of (v, n), s = 0;
+
+  if (n < 2)
+    return 0.0f;
+  for (gint i = 0; i < n; i++)
+    s += (v[i] - m) * (v[i] - m);
+  return (gfloat) sqrt (s / (n - 1));
+}
+
+static void
+print_stats (const char *name, const gfloat *v, gint n)
+{
+  g_autofree gfloat *c = g_memdup2 (v, sizeof (gfloat) * n);
+
+  qsort (c, n, sizeof (gfloat), cmp_float);
+  printf ("%s  mean %.3f  sd %.3f  median %.3f  p95 %.3f  p99 %.3f  "
+          "max %.3f\n", name, (gdouble) mean_of (c, n), (gdouble) sd_of (c, n),
+          (gdouble) c[n / 2], (gdouble) c[(gint) (n * 0.95)],
+          (gdouble) c[(gint) (n * 0.99)], (gdouble) c[n - 1]);
+}
+
+/* The separation index of two sets of scores. A larger value shows that
+ * the two sets are further apart. */
+static gfloat
+dprime (const gfloat *g, gint gn, const gfloat *i, gint in)
+{
+  gfloat sg = sd_of (g, gn), si = sd_of (i, in);
+  gfloat pooled = sqrtf ((sg * sg + si * si) / 2.0f);
+
+  if (pooled <= 0.0f)
+    return 0.0f;
+  return (mean_of (g, gn) - mean_of (i, in)) / pooled;
+}
+
 int
 main (int argc, char **argv)
 {
@@ -148,6 +205,14 @@ main (int argc, char **argv)
                "usage: %s  fingerA/frame*.pgm  fingerB/frame*.pgm\n"
                "The parent directory of each frame gives its group.\n",
                argv[0]);
+      return 2;
+    }
+
+  if (argc - 1 > MAX_FRAMES)
+    {
+      fprintf (stderr,
+               "%s: %d files given, but the limit is %d. Increase "
+               "MAX_FRAMES.\n", argv[0], argc - 1, MAX_FRAMES);
       return 2;
     }
 
@@ -239,7 +304,9 @@ main (int argc, char **argv)
   /* 3. the error rates of the operation of the driver */
   {
     static gfloat genuine[MAX_FRAMES];
-    static gfloat impostor[MAX_FRAMES * 8];
+    /* Each frame can go against the template of every other group, thus
+     * the limit is the number of frames times the number of groups. */
+    static gfloat impostor[MAX_FRAMES * MAX_FRAMES];
     gint gn = 0, in = 0;
 
     for (gint i = 0; i < n; i++)
@@ -249,22 +316,64 @@ main (int argc, char **argv)
         if (s >= 0.0f && gn < MAX_FRAMES)
           genuine[gn++] = s;
 
+        /* Each frame goes against the template of every other group, and
+         * not only the first one. A test with more groups then gives more
+         * impostor comparisons, which is what limits the estimate of the
+         * incorrect accept rate. */
         for (gint j = 0; j < n; j++)
           {
+            gboolean seen = FALSE;
+
             if (strcmp (frames[j].group, frames[i].group) == 0)
               continue;
+            for (gint k = 0; k < j; k++)
+              if (strcmp (frames[k].group, frames[j].group) == 0)
+                seen = TRUE;
+            if (seen)
+              continue;
+
             s = score_against_group (frames, n, i, frames[j].group);
-            if (s >= 0.0f && in < MAX_FRAMES * 8)
+            if (s >= 0.0f && in < MAX_FRAMES * MAX_FRAMES)
               impostor[in++] = s;
-            break;
           }
       }
 
     if (gn > 0 && in > 0)
       {
+        gfloat eer = -1.0f, eer_t = 0.0f, best = 2.0f;
+
         printf ("\nthe operation of the driver: each frame against a "
                 "template of the other frames\n");
         printf ("  genuine   n=%3d\n  impostor  n=%3d\n", gn, in);
+        print_stats ("  genuine ", genuine, gn);
+        print_stats ("  impostor", impostor, in);
+
+        /* The equal error rate is at the threshold where the two rates are
+         * the same. The sweep is fine, because the two rates change in
+         * steps of one comparison. */
+        for (gfloat t = 0.0f; t <= 1.0f; t += 0.0005f)
+          {
+            gint fr = 0, fa = 0;
+            gfloat frr, far, gap;
+
+            for (gint i = 0; i < gn; i++)
+              fr += (genuine[i] < t);
+            for (gint i = 0; i < in; i++)
+              fa += (impostor[i] >= t);
+            frr = (gfloat) fr / gn;
+            far = (gfloat) fa / in;
+            gap = ABS (frr - far);
+            if (gap < best)
+              {
+                best = gap;
+                eer = (frr + far) / 2.0f;
+                eer_t = t;
+              }
+          }
+        printf ("  equal error rate %.2f %% at the threshold %.3f\n",
+                (gdouble) (100.0f * eer), (gdouble) eer_t);
+        printf ("  separation d' = %.2f\n",
+                (gdouble) dprime (genuine, gn, impostor, in));
         printf ("\n threshold   FRR (correct finger rejected)   "
                 "FAR (different finger accepted)\n");
         for (gfloat t = 0.02f; t <= 0.402f; t += 0.02f)

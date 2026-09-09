@@ -1,0 +1,5 @@
+#!/bin/bash
+# One bell: "the press was accepted, press again".
+pw-play --volume=1.0 /usr/share/sounds/freedesktop/stereo/bell.oga 2>/dev/null \
+  || paplay /usr/share/sounds/freedesktop/stereo/bell.oga 2>/dev/null \
+  || printf '\a'

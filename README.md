@@ -6,11 +6,12 @@ reader (`USB\VID_2808&PID_93A9`). The sensor operates through the usual
 patched proprietary `.so`, or a Secure Boot MOK enrolment.
 
 > **This driver is experimental. Keep your password authentication.**
-> The match threshold is not a measured security parameter. Tests used two
-> fingers of one person, thus they cannot give a rate of incorrect accept
-> operations. Approximately one press of four also scores below the
-> threshold and needs a second press. Do not use this sensor as the only
-> authentication factor. The file
+> A measurement used 13 fingers of 5 persons. It gives 0 incorrect accept
+> operations in 1536 comparisons. Thus that rate is below approximately
+> 0.2 % at 95 % confidence, and the equal error rate is 4.7 %. All 5 persons live in one house, thus they are
+> not a sample of a population. Approximately one press of nine scores
+> below the threshold and needs a second press. Do not use this sensor as
+> the only authentication factor. The file
 > [`docs/MATCHING.md`](docs/MATCHING.md) gives the measurements and their
 > limits, and the section "Known issues" gives the faults that remain.
 
@@ -230,10 +231,9 @@ sees the change.
   starts the autosuspend after 2 seconds, and it makes the fault worse. The
   file `packaging/60-ft9201-fingerprint.rules` does this.
 - **A weak press gives a score below the threshold**, and it needs a second
-  press. With 8 enrolment frames the driver rejected approximately one press
-  of four. With 15 frames a test accepted each of 4 presses. But 4 presses
-  cannot give a rate. [`docs/MATCHING.md`](docs/MATCHING.md) gives the
-  numbers.
+  press. A measurement of 128 presses gives 10.9 % at the threshold 0.08. A
+  press that is not on the centre of the sensor is the largest cause.
+  [`docs/MATCHING.md`](docs/MATCHING.md) gives the numbers.
 
 ## Where the details are
 

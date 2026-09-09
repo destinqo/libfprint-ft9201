@@ -1708,33 +1708,37 @@ ft9201_template_unpack (FpPrint *print, guint8 *out_w, guint8 *out_h,
  * The threshold for a match. It applies to the fraction of agreeing pairs
  * from ft9201_match_pair().
  *
- * A measurement used live presses of two different fingers of one person.
- * The 14 presses gave 14 comparisons with the correct finger and 14
- * comparisons with the other finger:
+ * A measurement on 2026-09-09 gives this value. It used 128 frames of 13
+ * different fingers of 5 persons, with natural placement. The tool
+ * tools/ft9201-matcher scored each frame against a template of the other
+ * frames of its finger, and against a template of each other finger. That
+ * gives 128 comparisons with the correct finger and 1536 comparisons with
+ * a different finger.
  *
- *   the other finger, all 14 comparisons      0.000 to 0.036
- *   the correct finger, good presses          0.079 to 0.271
- *   the correct finger, weak or partial       0.024 to 0.037
+ *     threshold   incorrect reject   incorrect accept
+ *        0.04        7.0% (9/128)       0 of 1536
+ *        0.06       10.2% (13/128)      0 of 1536
+ *        0.08       10.9% (14/128)      0 of 1536
+ *        0.10       16.4% (21/128)      0 of 1536
  *
- * Thus the value 0.06 is in a true space between the two groups. No
- * comparison with the other finger came nearer than a factor of 1.6. Each
- * good press of the correct finger was more than the threshold by 30 % or
- * more. The measured error rates are 0 incorrect accept operations in 14,
- * and approximately 36 % incorrect reject operations. The user must press
- * a second time after a weak press, which is the correct behaviour for an
- * authentication path.
+ * The largest score of a different finger is 0.047 in 7561 comparisons of
+ * one frame against one frame. The value 0.08 keeps a distance of 1.7
+ * times to that score, and it costs one more incorrect reject operation
+ * than 0.06 in 128 attempts. That is the reason for 0.08 and not 0.06: an
+ * estimate of the incorrect accept rate from 5 persons is optimistic, thus
+ * the distance is worth more than 0.7 percent of incorrect reject
+ * operations.
  *
- * The limits of this measurement: 14 comparisons with one pair of fingers
- * of one person cannot give a rate of incorrect accept operations. For 0
- * of 14, the upper limit at 95 % confidence is still near 20 %. Thus this
- * threshold shows a clear difference between two fingers, but it is not a
- * measurement of security. Do the test again with more fingers and more
- * persons before you use this sensor as the only authentication factor.
+ * The limits of this measurement: 0 incorrect accept operations in 1536
+ * comparisons gives an upper limit of approximately 0.2 % at 95 %
+ * confidence. All 5 persons live in one house, thus their skin, their
+ * habits and their manner of a press are not a sample of a population. Do
+ * not use this sensor as the only authentication factor.
  *
  * If the sensor accepts an incorrect finger, increase this value and write
  * the change in the README.
  */
-#define FT9201_MATCH_THRESHOLD 0.06f
+#define FT9201_MATCH_THRESHOLD 0.08f
 
 /*
  * The limits of the threshold. A value outside these limits is a fault,
