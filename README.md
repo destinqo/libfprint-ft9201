@@ -35,8 +35,9 @@ patched proprietary `.so`, or a Secure Boot MOK enrolment.
   Catalog, thus you need no Windows machine. It also accepts a local vendor
   binary or a USB capture. Refer to "The MCU firmware". **The driver does
   not operate without that image.**
-- `meson-integration.patch`: the small change to the `meson.build` files of
-  libfprint that adds this driver to the build.
+- `packaging/0001-add-focaltech-ft9201-driver.patch`: the small change to
+  the `meson.build` files of libfprint that adds this driver to the build.
+  The RPM uses the same file.
 
 
 ## What the tests confirm
@@ -75,7 +76,7 @@ cd libfprint
 # Copy the driver into the tree and apply the build patch.
 cp /path/to/driver/focaltech_ft9201.c libfprint/drivers/
 cp /path/to/driver/focaltech_ft9201.h libfprint/drivers/
-patch -p1 < /path/to/meson-integration.patch
+patch -p1 < /path/to/packaging/0001-add-focaltech-ft9201-driver.patch
 
 # The option --prefix=/usr is necessary, because fprintd looks in /usr
 # and not in /usr/local.
