@@ -221,9 +221,11 @@ sees the change.
 
 - **The finger detection can stop after an idle period.** The driver renews
   the automatic sensor mode, and that corrects the fault in each test. The
-  sensor still stops in rare cases. A power cycle of the USB port recovers
-  it. [`docs/PROTOCOL.md`](docs/PROTOCOL.md) holds the full investigation,
-  the conditions that the tests exclude, and the measurements.
+  sensor still stops in rare cases. The driver then sends the firmware
+  again, which is a recovery that needs no power cycle. A power cycle of
+  the USB port stays the last operation that always works.
+  [`docs/PROTOCOL.md`](docs/PROTOCOL.md) holds the full investigation, the
+  conditions that the tests exclude, and the measurements.
 - **Turn off the USB autosuspend for this device.** The hwdb of Fedora
   starts the autosuspend after 2 seconds, and it makes the fault worse. The
   file `packaging/60-ft9201-fingerprint.rules` does this.

@@ -86,11 +86,12 @@ struct _FpiDeviceFocaltechFt9201
   guint   fw_step;
 
   /* Capture bookkeeping. */
-  FpiSsm *task_ssm;              /* the running action, or NULL when idle */
-  guint   spurious_polls;        /* finger reported but frame not usable */
-  guint   idle_polls;            /* polls since the last finger or renewal */
-  guint   rearm_retries;         /* re-arms that did not put the MCU back to work */
-  guint8 *frame;                 /* last captured frame, w*h bytes */
+  FpiSsm  *task_ssm;             /* the running action, or NULL when idle */
+  guint    spurious_polls;       /* finger reported but frame not usable */
+  guint    idle_polls;           /* polls since the last finger or renewal */
+  guint    rearm_retries;        /* re-arms that did not put the MCU back to work */
+  gboolean fw_reloaded;          /* the recovery download ran in this activation */
+  guint8  *frame;                /* last captured frame, w*h bytes */
 
   /* Which action the shared capture machine is serving, and its state. */
   FpiDeviceAction action;
@@ -967,17 +968,55 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
                   FT9201_REARM_MAX_RETRY);
           fpi_ssm_jump_to_state_delayed (ssm, ACTIVATE_AUTO_POWER_SET_1, 14);
         }
-      else
+      else if (!self->fw_reloaded)
         {
-          /* This is not a fatal fault. The sensor is correct in all other
-           * conditions, and the caller can still get a frame if a finger
-           * arrives at the correct moment. Thus the driver gives a warning
-           * and does not stop the enrolment. */
+          /*
+           * The arm writes did not start the search. The driver now sends
+           * the firmware again, and then it arms the sensor again.
+           *
+           * The sensor answers each register in this condition, thus it
+           * has its firmware. But the search for a finger does not start,
+           * and each poll of the request 0x43 gives 00. Before this step
+           * the only correct operation was a power cycle of the USB port,
+           * which the user cannot always do.
+           *
+           * A test sent the image to a sensor that already had it. The
+           * download gave the status a5 5a, and the sensor then captured
+           * frames. Thus the operation is safe on a sensor that operates.
+           * A test on a sensor in this condition is not possible on
+           * demand, because the condition is not deterministic.
+           */
+          GError *error = NULL;
+
           self->rearm_retries = 0;
+          self->fw_reloaded = TRUE;
           fp_warn ("FT9201 sensor did not start hunting for a finger after "
                    "%d attempts (register 0x%02x reads 0x%02x 0x%02x); "
-                   "presses may go unnoticed until the device is "
-                   "power-cycled", FT9201_REARM_MAX_RETRY,
+                   "sending the firmware again", FT9201_REARM_MAX_RETRY,
+                   FT9201_REG_MCU_SENSOR_STATUS, self->reg_buf[0],
+                   self->reg_buf[1]);
+
+          if (!ft9201_load_firmware (self, &error))
+            {
+              fpi_ssm_mark_failed (ssm, error);
+              return;
+            }
+
+          self->fw_step = 0;
+          fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
+        }
+      else
+        {
+          /* The second attempt also did not start the search. This is not
+           * a fatal fault. The sensor is correct in all other conditions,
+           * and the caller can still get a frame if a finger arrives at
+           * the correct moment. Thus the driver gives a warning and does
+           * not stop the enrolment. */
+          self->rearm_retries = 0;
+          fp_warn ("FT9201 sensor did not start hunting for a finger, also "
+                   "after a second firmware download (register 0x%02x "
+                   "reads 0x%02x 0x%02x); presses may go unnoticed until "
+                   "the device is power-cycled",
                    FT9201_REG_MCU_SENSOR_STATUS, self->reg_buf[0],
                    self->reg_buf[1]);
           fpi_ssm_next_state (ssm);
@@ -2411,6 +2450,7 @@ dev_open (FpDevice *dev)
 
   self->retry_count = 0;
   self->fw_step = 0;
+  self->fw_reloaded = FALSE;
   self->task_ssm = fpi_ssm_new (dev, activate_run_state, ACTIVATE_NUM_STATES);
   fpi_ssm_start (self->task_ssm, activate_ssm_done);
 }

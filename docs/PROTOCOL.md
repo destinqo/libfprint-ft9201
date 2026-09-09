@@ -422,6 +422,29 @@ download does no damage, but it takes time.
 
 ## The finger detection stall
 
+### The recovery that the driver now makes
+
+The activation reads the register `0x20` after it arms the sensor. The
+value `01 01` shows that the MCU searches for a finger. When the value is
+different, the driver arms the sensor again, three times.
+
+If the search still does not start, the driver **sends the firmware
+again** and arms the sensor again. The sensor answers each register in this
+condition, thus it has its firmware, but its search does not start. Before
+this step the only correct operation was a power cycle of the USB port, and
+a user cannot always do that.
+
+**What a test confirmed:** the tool `tools/ft9201-fwload2` sent the image to
+a sensor that already had it. The download gave the MCU status `a5 5a` and
+the correct dimensions, and the sensor then captured two frames with the
+driver. Thus the operation is safe on a sensor that operates.
+
+**What a test did not confirm:** that the download starts the search on a
+sensor in the stalled condition. That condition is not deterministic, thus a
+test on demand is not possible. The recovery runs one time in each
+activation, and the driver gives the earlier warning if the search still
+does not start.
+
 This section holds the full investigation of the fault that the README names as a known issue.
 
 - **The finger detection stopped after one idle period. The driver now
