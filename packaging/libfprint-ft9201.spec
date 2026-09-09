@@ -2,7 +2,7 @@
 
 Name:           libfprint-ft9201
 Version:        %{libfprint_version}
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        libfprint runtime rebuilt with an added FocalTech FT9201 (2808:93a9) driver
 
 # Same license as the vendored libfprint sources it is built from.
@@ -176,6 +176,19 @@ install -D -m 0644 %{SOURCE4} \
 %{_bindir}/ft9201-extract-firmware
 
 %changelog
+* Wed Sep 09 2026 <you> - 1.94.100-6
+- The driver sends the firmware again when the search for a finger does not
+  start. The activation arms the sensor and reads the register 0x20. The
+  value 01 01 shows that the MCU searches. The driver arms the sensor again
+  three times when the value is different. It then sends the firmware again
+  and arms the sensor again, one time in each activation. Before this
+  change only a power cycle of the USB port corrected that condition.
+- A test sent the image to a sensor that already had it. The MCU gave the
+  status a5 5a and the correct dimensions, and the driver then captured two
+  frames. Thus the operation is safe on a sensor that operates. A test
+  cannot confirm that it starts the search on a stalled sensor, because
+  that condition is not deterministic.
+
 * Wed Sep 09 2026 <you> - 1.94.100-5
 - Enrolment now takes 15 frames and not 8. A measurement gave the larger
   value. It scored each saved frame against a template of the other
