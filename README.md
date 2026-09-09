@@ -226,8 +226,11 @@ sees the change.
 - **Turn off the USB autosuspend for this device.** The hwdb of Fedora
   starts the autosuspend after 2 seconds, and it makes the fault worse. The
   file `packaging/60-ft9201-fingerprint.rules` does this.
-- **Approximately one press of four gives a score below the threshold** and
-  needs a second press.
+- **A weak press gives a score below the threshold**, and it needs a second
+  press. With 8 enrolment frames the driver rejected approximately one press
+  of four. With 15 frames a test accepted each of 4 presses. But 4 presses
+  cannot give a rate. [`docs/MATCHING.md`](docs/MATCHING.md) gives the
+  numbers.
 
 ## Where the details are
 

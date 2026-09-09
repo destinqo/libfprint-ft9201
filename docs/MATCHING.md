@@ -179,12 +179,16 @@ gcc -O2 -Wall -Wextra -o ft9201-matcher ft9201-matcher.c \
 ```
 
 Put the frames of one finger in one directory. The name of the parent
-directory gives the group. The tool prints the score of each pair, the
-statistics of the two groups, the error rates against the threshold, and
-the error rate against the number of the frames in the template.
+directory gives the group. The tool prints four results:
 
-**Collect the frames as the sensor is used.** Put the finger down the same
-way each time. Do not change the position on purpose.
+1. the score of each pair,
+2. the statistics of the two groups,
+3. the error rates against the threshold,
+4. the error rate against the number of the frames in the template.
+
+**Collect the frames in the same way that a person uses the sensor.** Put
+the finger down the same way each time. Do not change the position on
+purpose.
 
 ### The threshold at run time
 
@@ -204,8 +208,8 @@ only.** A smaller threshold accepts a different finger more often.
 
 ### What the measurement gave
 
-The measurement used the 18 frames of one Windows enrolment session, where
-3 frames are one finger and 15 frames are a second finger.
+The measurement used the 18 frames of one Windows enrolment session. Of
+those frames, 3 are one finger and 15 are a second finger.
 
 | | |
 |---|---|
@@ -231,22 +235,45 @@ session changed the position of the finger at each press, thus these rates
 are worse than the rates of normal use. The shape of the curve is the
 result that matters.
 
+### The measurement on the hardware after the change
+
+A test measured the change from 8 to 15 frames on the sensor. The test made
+one enrolment of 15 stages. It then made 4 presses of the enrolled finger,
+and 5 presses of a different finger. These are the scores:
+
+| | 8 frames | 15 frames |
+|---|---|---|
+| correct finger | 0.136 to 0.388 | **0.239 to 0.357** |
+| different finger | 0.000 to 0.045 | **0.024 to 0.027** |
+| distance between the groups | 3.0 x | **8.9 x** |
+
+The driver accepted the enrolled finger at the first press each time. It
+rejected the different finger each time. The enrolment needed 19 seconds.
+
+**These numbers are not a measurement of security.** The test used two
+fingers of one person. It made only 4 comparisons of the correct finger and
+5 comparisons of a different finger. The numbers show only that the larger
+template increases the distance between the two groups. Do the test again
+with more fingers and more persons before you use this sensor as the only
+authentication factor.
+
 ## What other projects measured
 
 - **`Dgmtnz/ft9201-fingerprint-linux`** recalibrated a correlation matcher
-  on a `2808:9338` unit and reports an equal error rate near 0.07 %, with
-  8 of 8 correct fingers accepted and 10 of 10 different fingers rejected.
-  Three values gave that result: the search radius 3 -> 16 pixels, the
-  enrolment stages 5 -> 15, and the threshold 0.30 -> 0.55. That project
-  also gives the warning about the position of the finger, and its numbers
-  are the reason to believe it: a dataset with a changed position gives an
-  equal error rate near 45 % for each matcher.
+  on a `2808:9338` unit. It reports an equal error rate near 0.07 %. Its
+  matcher accepted 8 correct fingers of 8, and it rejected 10 different
+  fingers of 10. Three values gave that result: the search radius 3 -> 16
+  pixels, the enrolment stages 5 -> 15, and the threshold 0.30 -> 0.55.
+  That project also gives the warning about the position of the finger. Its
+  numbers are the reason to believe that warning. A dataset with a changed
+  position gives an equal error rate near 45 % for each matcher.
 - **`NBN-PATRIC/ft9201-libfprint`** measured that NBIS gives at most 3
-  minutiae on a 64 x 80 frame and never matches, and that a correlation
-  over subtemplates separates the two groups only when the finger is in
-  almost the same position. It read in the string table of the vendor
-  library that the vendor stores **more than one subtemplate for each
-  finger**, with the limit `MAX_SUBTEMPLATES_PER_FINGER`.
+  minutiae on a 64 x 80 frame, and that it never matches. It also measured
+  that a correlation over subtemplates separates the two groups only when
+  the finger is in almost the same position. In the string table of the
+  vendor library it found that the vendor keeps **more than one subtemplate
+  for each finger**. The limit has the name
+  `MAX_SUBTEMPLATES_PER_FINGER`.
 - **`narkomart/focaltech-ft9348-linux`** calls the matcher of the vendor
   from the Linux library. Those functions are in the ELF `.symtab` and not
   in the dynamic symbols, thus `nm -D` does not show them. The function
@@ -255,6 +282,6 @@ result that matters.
   The homography shows that the vendor also uses keypoints and a geometric
   model, which is the method of this driver.
 
-The overlap area is the useful idea. This driver has no such value. A
-small overlap can give a large ratio of inliers by accident, and that is
-the probable cause of the small distance between the two groups.
+The overlap area is the useful idea. This driver has no such value. A small
+overlap can give a large ratio of inliers by accident. That is the probable
+cause of the small distance between the two groups.

@@ -12,8 +12,10 @@ The tests used a physical `2808:93a9` unit with `bcdDevice 0100`.
   power from the sensor, thus the sensor had no firmware. The driver then
   sent the firmware, read the chip data, armed the sensor and captured a
   96x96 fingerprint. The download needs approximately 700 ms.
-- **A complete enrolment passes.** It has 8 stages and needs approximately
-  20 seconds.
+- **A complete enrolment passes.** It has 15 stages, and it needed 19
+  seconds on the hardware. An earlier version had 8 stages. A measurement
+  of the rate of the incorrect reject operations gave the larger value.
+  Refer to `FT9201_ENROLL_STAGES`.
 - **The firmware download is necessary, and earlier drivers did not have
   it.** The bulk OUT endpoint `0x02` is not only for a firmware update.
   10368 bytes of 8051 code go through it after each cold connection.
@@ -174,21 +176,26 @@ when both bytes are zero. `Cyd0n1a` records them as `00 00`. This driver
 accepts only `dd dd`. If they are a quality value, this driver discards
 frames that it can use.
 
-**The chip ID `0x95a8` is the variant 3, the FT9361.** `Cyd0n1a` gives the
-table `0x9338` = variant 1 = FT9338W, `0x95a8` = variant 3 = FT9361,
-`0x9536` = variant 6 = FT9536W.
+**The chip ID `0x95a8` is the variant 3, the FT9361.** `Cyd0n1a` gives this
+table:
+
+| chip ID | variant | sensor |
+|---|---|---|
+| `0x9338` | 1 | FT9338W |
+| `0x95a8` | 3 | FT9361 |
+| `0x9536` | 6 | FT9536W |
 
 **A different revision uses the request `0x6F`.** `NBN-PATRIC` measured a
-64 x 80 unit where `0x35` arms nothing, and where the bulk read comes from
-`0x6F` with the length in `wValue` and the address in `wIndex`. That path
-returns exactly width x height bytes, with no header. The `0x35` path of
-this driver is measured on this hardware and it operates, thus the two
-revisions differ.
+64 x 80 unit where `0x35` arms nothing. On that unit the bulk read comes
+from `0x6F`, with the length in `wValue` and the address in `wIndex`. That
+path returns exactly width x height bytes, and it gives no header. A test
+measured the `0x35` path of this driver on this hardware, and that path
+operates. Thus the two revisions differ.
 
 **The vendor renews the mode approximately each second.** That project
-measured 1 finger detection in 4445 polls with no renewal, and 24
-detections with a renewal after each 30 polls of 30 ms. This driver renews
-after 1000 polls of 80 ms, which is 80 seconds.
+measured 1 finger detection in 4445 polls with no renewal. It then measured
+24 detections with a renewal after each 30 polls of 30 ms. This driver
+renews after 1000 polls of 80 ms, which is 80 seconds.
 
 **The MCU configuration after the upload.** `OMGrant` takes it from the
 Linux driver of FocalTech, where the functions have the names
