@@ -2,7 +2,7 @@
 
 Name:           libfprint-ft9201
 Version:        %{libfprint_version}
-Release:        4%{?dist}
+Release:        5%{?dist}
 Summary:        libfprint runtime rebuilt with an added FocalTech FT9201 (2808:93a9) driver
 
 # Same license as the vendored libfprint sources it is built from.
@@ -176,6 +176,25 @@ install -D -m 0644 %{SOURCE4} \
 %{_bindir}/ft9201-extract-firmware
 
 %changelog
+* Wed Sep 09 2026 <you> - 1.94.100-5
+- Enrolment now takes 15 frames and not 8. A measurement of the rate of
+  the incorrect reject operations against the size of the template gave
+  the larger value, and the rate does not stop to fall before 14 frames.
+  On the hardware the correct finger now scores 0.239 to 0.357 and a
+  different finger scores 0.024 to 0.027, thus the distance between the
+  two groups increases from 3.0 to 8.9 times. A template that an earlier
+  version wrote holds 8 frames and stays valid.
+- The variable FT9201_MATCH_THRESHOLD changes the match threshold at run
+  time, for a measurement. The driver accepts only one number between
+  0.01 and 1.00, it keeps the compiled default of 0.06 for each other
+  content, and it writes a warning for each accepted value.
+- The driver decodes the sensor type that the firmware download already
+  read from the SFR space, and it puts the type in the log. This unit is
+  the type 3 and it reports 96 x 96, thus the installed firmware image is
+  correct for it.
+- The documentation moves from one file of 787 lines to a README of 246
+  lines, docs/PROTOCOL.md and docs/MATCHING.md.
+
 * Mon Sep 07 2026 <you> - 1.94.100-2
 - Driver now downloads the sensor's MCU firmware, which is what the
   "needs a Windows machine to recover" bug always was: the FT9201 keeps
