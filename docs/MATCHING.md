@@ -323,6 +323,34 @@ measurement shows that it is not.
 The difference between the best finger and the worst is 6 times, and it
 follows the person and the finger, not the age.
 
+### The rate holds for one physical position of the sensor
+
+The driver handles a turn of the finger. The descriptor turns its sample
+grid by the orientation of the keypoint, and it keeps each gradient
+direction relative to that orientation. The RANSAC model then estimates a
+turn of any angle together with a movement, and it puts no limit on the
+angle. Thus a turn alone does not stop a match.
+
+A change of the **position of the sensor** is a different thing. The person
+who uses it then puts the finger down at a new angle, and the sensor sees a
+different area of the skin through the same 96 x 96 window. That is a loss
+of the common area, and not a turn.
+
+A test showed this. The sensor moved to a longer cable, which changed the
+angle of a natural press. The template came from the earlier position:
+
+| | result |
+|---|---|
+| the template of the earlier position | no match, 3 times of 3 |
+| a new template, after the move | match, 4 times of 4 |
+
+Both tests used the threshold 0.08.
+
+**Thus the rate of the incorrect reject operations above holds for one
+physical position.** The collection of the frames used one session and one
+position, and the enrolment of a user must use the position of normal use.
+Enrol again after a change of the position of the sensor.
+
 ### Why the incorrect reject rate is an upper limit
 
 Six frames of 128 score less than 0.05 against every other frame of their

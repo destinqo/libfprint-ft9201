@@ -2,7 +2,7 @@
 
 Name:           libfprint-ft9201
 Version:        %{libfprint_version}
-Release:        6%{?dist}
+Release:        7%{?dist}
 Summary:        libfprint runtime rebuilt with an added FocalTech FT9201 (2808:93a9) driver
 
 # Same license as the vendored libfprint sources it is built from.
@@ -176,6 +176,24 @@ install -D -m 0644 %{SOURCE4} \
 %{_bindir}/ft9201-extract-firmware
 
 %changelog
+* Wed Sep 09 2026 <you> - 1.94.100-7
+- The match threshold is 0.08 and not 0.06. A measurement gives the value.
+  Five persons gave 13 different fingers, and each finger gave 9 or 10
+  presses with natural placement. At the threshold 0.08 the driver rejects
+  the correct finger 14 times of 128, and it accepts a different finger 0
+  times of 1536. That gives an upper limit of approximately 0.2 % at 95 %
+  confidence, where the earlier measurement of 5 comparisons gave 45 %. The
+  equal error rate is 4.7 % and the separation d' is 2.36.
+- The threshold 0.06 also gives 0 incorrect accept operations. But 0.08
+  keeps a distance of 2.1 times to the largest score of a different finger,
+  and 0.06 keeps 1.6 times. An estimate from 5 persons of one house is
+  optimistic, thus the distance is worth one more incorrect reject
+  operation in 128 attempts.
+- A measurement also shows that FT9201_RIDGE_PERIOD is correct for a child.
+  The two fingers of the child are in the middle of the list of the mean
+  scores. The difference between the best finger and the worst is 6 times,
+  and it follows the person and not the age.
+
 * Wed Sep 09 2026 <you> - 1.94.100-6
 - The driver sends the firmware again when the search for a finger does not
   start. The activation arms the sensor and reads the register 0x20. The

@@ -230,6 +230,11 @@ sees the change.
 - **Turn off the USB autosuspend for this device.** The hwdb of Fedora
   starts the autosuspend after 2 seconds, and it makes the fault worse. The
   file `packaging/60-ft9201-fingerprint.rules` does this.
+- **Enrol again after you move the sensor.** The driver handles a turn of
+  the finger, but a new position of the sensor makes the person put the
+  finger down at a new angle. The sensor then sees a different area of the
+  skin. A test gave no match 3 times of 3 with the old template, and a
+  match 4 times of 4 after a new enrolment.
 - **A weak press gives a score below the threshold**, and it needs a second
   press. A measurement of 128 presses gives 10.9 % at the threshold 0.08. A
   press that is not on the centre of the sensor is the largest cause.
