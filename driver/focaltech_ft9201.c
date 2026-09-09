@@ -67,6 +67,7 @@ struct _FpiDeviceFocaltechFt9201
   guint16 chip_id;
   guint8  sensor_width;
   guint8  sensor_height;
+  guint8  sensor_type;          /* from the SFR 0x00f3, 0xff = not read */
 
   /* Scratch space holding the response of the last register read. Only
    * read again once the corresponding *_run_state case has issued the
@@ -428,6 +429,46 @@ ft9201_bulk_out (FpiSsm *ssm, FpDevice *dev, guint8 *buffer, gsize length,
 }
 
 
+/*
+ * Reads the answer of one SFR read of the download script.
+ *
+ * The download script sends a group of reads and writes to the SFR space
+ * of the 8051 core. It comes from a capture of the vendor driver, and the
+ * driver sends it without a change. Two of those reads carry data:
+ *
+ * - The location FT9201_SFR_CHIP_TYPE gives the type of the sensor.
+ * - The location FT9201_SFR_TYPE_LATCH gives a latch. The next step writes
+ *   the constant 0x0001 to it. The vendor writes the value that it read,
+ *   with the bit 0 set. The two operations differ when the latch is not
+ *   0x00, thus the driver writes a warning in that condition.
+ *
+ * The driver does not use the type. It only puts the type in the log,
+ * because the correct firmware image for this sensor is an open question.
+ */
+static void
+ft9201_note_sfr_read (FpiDeviceFocaltechFt9201 *self, guint16 index)
+{
+  guint8 raw = self->reg_buf[0];
+
+  if (index == FT9201_SFR_CHIP_TYPE)
+    {
+      self->sensor_type = (raw >> 1) & 0x0f;
+      fp_dbg ("FT9201 SFR 0x%04x reads 0x%02x, thus the sensor type is %u",
+              index, raw, self->sensor_type);
+    }
+  else if (index == FT9201_SFR_TYPE_LATCH)
+    {
+      fp_dbg ("FT9201 SFR 0x%04x reads 0x%02x", index, raw);
+      if ((raw | 0x01) != 0x01)
+        {
+          fp_warn ("FT9201 SFR 0x%04x reads 0x%02x. The driver writes 0x01 to "
+                   "it, and the vendor writes 0x%02x. Refer to the open "
+                   "questions in the documentation.",
+                   index, raw, raw | 0x01);
+        }
+    }
+}
+
 /****** ACTIVATION (firmware, device identification, arming) ******/
 
 enum activate_states {
@@ -618,6 +659,13 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case ACTIVATE_FW_NEXT:
+      {
+        const Ft9201Op *done = &ft9201_firmware_script[self->fw_step];
+
+        if (done->kind == FT9201_OP_IN &&
+            done->request == FT9201_REQ_SFR_READ)
+          ft9201_note_sfr_read (self, done->index);
+      }
       self->fw_step++;
       fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
       break;
@@ -710,8 +758,9 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
 
     case ACTIVATE_STORE_DIM_HEIGHT:
       self->sensor_height = self->reg_buf[0];
-      fp_dbg ("FT9201 sensor dimensions: %ux%u",
-              self->sensor_width, self->sensor_height);
+      fp_dbg ("FT9201 sensor dimensions: %ux%u, chip ID 0x%04x, type %u",
+              self->sensor_width, self->sensor_height, self->chip_id,
+              self->sensor_type);
       if (self->sensor_width == 0 || self->sensor_height == 0)
         {
           ft9201_recover_and_fail (ssm, dev,
@@ -2422,6 +2471,9 @@ fpi_device_focaltech_ft9201_finalize (GObject *object)
 static void
 fpi_device_focaltech_ft9201_init (FpiDeviceFocaltechFt9201 *self)
 {
+  /* The value 0xff shows that no read gave the type. A warm start does no
+   * download, thus it reads no type. */
+  self->sensor_type = FT9201_SENSOR_TYPE_UNKNOWN;
 }
 
 static void

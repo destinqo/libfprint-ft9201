@@ -102,6 +102,24 @@
 #define FT9201_REG_CAPTURE_READY 0x30
 #define FT9201_REG_UNKNOWN_41 0x41
 
+/* Two locations in the SFR space of the 8051 core. The driver reads them
+ * through the request FT9201_REQ_SFR_READ during the download.
+ *
+ * The location 0x00f3 gives the type of the sensor. The type is in the
+ * bits 1 to 4: type = (value >> 1) & 0x0f. The project
+ * OMGrant/ft9201-libfprint found this, and the type 3 there uses a
+ * geometry of 64 x 80.
+ *
+ * The location 0x00f4 holds a latch. That project reads the location and
+ * writes the value again with the bit 0 set. This driver writes the
+ * constant 0x0001. The two operations give the same result only when the
+ * location reads 0x00. */
+#define FT9201_SFR_CHIP_TYPE 0x00f3
+#define FT9201_SFR_TYPE_LATCH 0x00f4
+
+/* The driver puts this value in the type when no read gave a type. */
+#define FT9201_SENSOR_TYPE_UNKNOWN 0xff
+
 /* The constant values from the USB captures. Tests on the hardware confirm
  * all of them. */
 

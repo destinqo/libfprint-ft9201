@@ -1,0 +1,15 @@
+#!/bin/bash
+# Audible cue for "the operator must read the terminal".
+#
+# This sound is different from tools/beep. That one says "put your finger on
+# the sensor now". This one says "look at the terminal", and it does not ask
+# for a finger. A person who does other work must hear the difference.
+S=/usr/share/sounds/freedesktop/stereo
+play_one () {
+  pw-play --volume=1.0 "$1" 2>/dev/null \
+    || paplay "$1" 2>/dev/null \
+    || printf '\a'
+}
+for i in 1 2; do
+  play_one "$S/message-new-instant.oga"
+done

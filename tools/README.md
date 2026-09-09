@@ -131,3 +131,17 @@ sudo uhubctl -l 5-5 -p 3 -a cycle -d 4
 sudo timeout 12 .../examples/img-capture /tmp/x.pgm   # let the driver arm it
 sudo /tmp/ft9201-idle-hunt 150                        # press once early, once near the end
 ```
+
+## The audible cues
+
+A hardware test needs a person, and that person does not watch the terminal.
+Two scripts give a sound. They are different, because the two messages are
+different:
+
+- **`beep`** — three bell sounds. It says "put your finger on the sensor
+  now". A test uses it before each operation that waits for a finger.
+- **`attention`** — two message sounds. It says "read the terminal". It does
+  not ask for a finger.
+
+Use one bell for "the press was accepted, press again". The enrolment test
+does this, because 15 presses with no answer are difficult to count.

@@ -104,9 +104,10 @@ The items that the tests confirmed are in the section above. These
 questions are open:
 
 - **The function of the undocumented download requests.** The driver sends
-  `0x03`, `0x30`, `0x57`, `0x60`, `0x64`, `0x65`, `0x66`, `0x68` and `0x69`
-  in their captured form. The pair `0x65`/`0x66` has the appearance of a
-  byte read and write operation in the SFR space of the 8051 core. The pair
+  `0x03`, `0x30`, `0x57`, `0x60`, `0x64`, `0x68` and `0x69` in their
+  captured form. The pair `0x65`/`0x66` is a byte read and write operation
+  in the SFR space of the 8051 core, and the section "What other projects
+  found" gives the two locations that carry data. The pair
   `0x68`/`0x69` does the same in the code RAM. The three writes of `0x55` to
   the location `0xc2` have the appearance of an unlock operation. The
   request `0x57` needs approximately 12.5 ms, thus it probably writes
@@ -132,9 +133,12 @@ questions are open:
   The second firmware image in both vendor binaries is probably for one of
   those sensors.
 - **The correct firmware revision.** Two revisions are known, and both
-  operate. They differ in the geometry that they set (96x96 or 64x80). No
-  other difference is known. A revision with a larger geometry can exist,
-  and it would be the most useful discovery for this sensor.
+  operate. They differ in the geometry that they set (96x96 or 64x80). A
+  test read the type of this sensor, and the type is 3. A device of the
+  same type in a different project also captures 96 x 96. Thus the
+  installed 96 x 96 image is correct for this unit. A revision with a
+  larger geometry can exist, and it would be the most useful discovery for
+  this sensor.
 - **The header `dd dd`.** It is a constant marker, and the driver uses it as
   a check. The reason for those two bytes is not known, and no test shows a
   different valid value.
@@ -164,11 +168,21 @@ and it discards the answer:
 type = (raw >> 1) & 0x0f
 ```
 
-The type 3 is the FT9348W, and the matcher of the vendor uses 64 x 80 for
-it. This answers the open question above about the two firmware revisions,
-but no test on this hardware confirms it. Note also that the driver writes
-the constant `0x0001` to `0x00f4`, and that project writes the value that
-it read, with the bit 0 set.
+**A test on this hardware read those two locations.** The driver now
+decodes the answers that it already read, and it puts them in the log:
+
+- `0x00f3` reads `0x26`, thus the type of this sensor is **3**.
+- `0x00f4` reads `0x00`. The driver writes the constant `0x0001` to that
+  location, and the vendor writes the value that it read with the bit 0
+  set. Those two operations give the same result here. The driver writes a
+  warning if a different unit reads a value that is not `0x00`.
+
+**The type does not show that the firmware image is incorrect.** The 64 x
+80 is not a geometry of the sensor. It is the input size that the matcher
+of the vendor wants. The device of that project is also the type 3, and
+it also captures 96 x 96. It cuts the frame to 64 x 80 only before the call
+to the matcher. This sensor reports 96 x 96 with the installed image, thus
+that image is correct.
 
 **The two bytes before the image can be a quality value.** That project
 reads them as a quality value of the chip, and it discards a frame only
