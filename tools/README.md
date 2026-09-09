@@ -132,6 +132,22 @@ sudo timeout 12 .../examples/img-capture /tmp/x.pgm   # let the driver arm it
 sudo /tmp/ft9201-idle-hunt 150                        # press once early, once near the end
 ```
 
+- **`rotation-test.c`** — measures the effect of a turn on the matcher of
+  the driver. It turns each frame and scores the turned frame against the
+  frame that is not turned. It uses the same include file as
+  `ft9201-matcher`, thus it measures the code of the driver.
+
+  ```bash
+  ./extract-matcher.sh
+  gcc -O2 -o rotation-test rotation-test.c \
+      $(pkg-config --cflags --libs glib-2.0) -lm
+  ./rotation-test  ../samples/dataset-*/*/*.pgm
+  ```
+
+  A turn of 90 degrees needs no interpolation, thus its score shows what
+  the matcher does with a turn alone. An angle between 0 and 90 degrees
+  also carries the loss from the bilinear interpolation.
+
 ## The audible cues
 
 A hardware test needs a person, and that person does not watch the terminal.
