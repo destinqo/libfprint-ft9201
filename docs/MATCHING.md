@@ -1,0 +1,260 @@
+# The verification of the FT9201
+
+This file tells you how the driver decides that two fingerprints are the
+same. The file [`../README.md`](../README.md) tells you how to build and
+use the driver, and [`PROTOCOL.md`](PROTOCOL.md) holds the notes about the
+hardware.
+
+## How it operates
+
+**The verification operates.** A measurement used two different fingers of
+one person:
+
+| | result | score range |
+| --- | --- | --- |
+| the enrolled finger | **11 of 11 matched** | 0.136 to 0.388 |
+| a different finger | **0 of 18 accepted** | 0.000 to 0.045 |
+
+The threshold is 0.06. The enrolment completed 8 stages of 8, and the driver
+discarded no frame.
+
+**Read the margin with care.** The first group of presses with the different
+finger gave a maximum of 0.036. A later group gave **0.045**. Thus the
+distance to 0.06 is only a factor of 1.33 on that side, against 2.3 on the
+side of the correct finger. The two groups did not overlap in 29
+comparisons. But the maximum of the different finger increased with more
+samples, which is the usual behaviour. This is the reason why these numbers
+are not a security measurement. The 18 comparisons use one pair of fingers
+of one person. They give an upper limit of approximately 15 % on the rate of
+incorrect accept operations, at 95 % confidence.
+
+The correct description is "the driver separates two fingers clearly", and
+not "the driver is secure". Before you use this sensor as the only
+authentication factor, measure it with more fingers and more persons. If the
+maximum of the different finger continues to increase, increase
+`FT9201_MATCH_THRESHOLD` and write the new numbers in this file.
+
+### The enrolment technique changes the result
+
+A measurement through `fprintd` used the same finger and three enrolment
+techniques:
+
+| enrolment technique | matched | scores |
+| --- | --- | --- |
+| eight quick presses | 3 of 4 | 0.198, 0.124, 0.045, 0.068 |
+| the finger moved between presses | 1 of 4 | 0.042, 0.025, 0.110, 0.044 |
+| **the same position, firm, 1 s each** | **4 of 4** | 0.278, 0.333, 0.281, 0.244 |
+
+Thus **consistency is better than coverage** for this matcher. A verify
+operation compares one press against the template. The image area is only
+4.5 mm. Thus a template from eight different parts of the finger gives one
+press only one frame for a comparison. Tell the users to press the same
+position eight times.
+
+### Why the driver does not use minutiae
+
+The image device path of libfprint uses NBIS bozorth3. That path is closed
+for a sensor of this size:
+
+- A 96x96 frame gives **1 or 2 minutiae**. A measurement used 23 frames and
+  each combination of `FPI_IMAGE_PARTIAL`, `FPI_IMAGE_COLORS_INVERTED`, a
+  `ppmm` from 0 to 25, and a scale of 1x to 4x.
+- Image enhancement does not help. Histogram equalisation, tiled
+  equalisation of the CLAHE type, unsharp masking and a ridge band-pass
+  filter increase the mean only from 1.1 to 1.5. No frame gives 6.
+- A combination of frames does not help. The drivers `elan` and `elanspi` do
+  this, but consecutive presses give almost the same position. Thus there is
+  no new area. The best gain in an enrolment of 18 frames was a factor of
+  1.00.
+- The frames have a good quality. The maps of NBIS give the highest quality
+  to 19 of 144 blocks. A square of 4.5 mm on a fingertip does not contain
+  ten minutiae.
+- Ten is a hard limit. `bozorth3` gives `ZERO_MATCH_SCORE` and does no
+  calculation when one side has fewer than `MIN_COMPUTABLE_BOZORTH_MINUTIAE`
+  minutiae. Each score is 0, thus **no `bz3_threshold` can give a match**.
+  Therefore the driver is a plain `FpDevice` with its own comparison.
+
+### What the driver does
+
+It uses keypoints, descriptors and a check of the geometry. The vendor
+software of the sensor uses the same method. This is not an assumption.
+Their Linux library has symbol names. Their Windows engine adapter
+(`ftWbioEngineAdapter.dll`) exports `FtBuildGaussPyr`, `FtBuildDogPyr`,
+`FtCreateInitImg`, `FtAdjustForImgDbl`, `FtCalcFeatureScales`, `FtDeriv3D`,
+`FtHistToDescr`, `FtComputeDescriptors` and `FtCalcBriskFeatureOris`. Their
+matcher calls `FtRansacNew`, `FtEstimateRotParms` and `FtHmatrixInv`. These
+names give scale-space keypoints with descriptors of the SIFT type and the
+BRISK type, a match operation, and a check with RANSAC. This driver uses the
+same method, but no vendor code. The steps below are the usual formulation
+from the literature.
+
+1. **Local contrast normalisation.** The driver subtracts the local mean and
+   divides by the local standard deviation. This removes the pressure
+   gradient. Without this step, a strong press and a light press of one
+   finger differ more than two different fingers with an equal press.
+2. **A frame two times larger**, as the function `FtAdjustForImgDbl` of the
+   vendor also makes. At 96x96 there are too few pixels for each ridge, and
+   the keypoints are not stable.
+3. **Keypoints** from the minimum and maximum values of a difference-of-
+   Gaussians for the measured ridge period of 10.7 pixels. The driver uses
+   no scale space with more than one octave. The sensor resolution is
+   constant, thus an independence from the scale gives no advantage and
+   causes more incorrect matches.
+4. **Descriptors**: a grid of 4x4 histograms of the gradient direction, each
+   with 8 bins. The driver takes the samples in the coordinates of the
+   keypoint. Thus a turn of the finger turns the sample positions and not
+   the descriptor.
+5. **A match operation with the ratio test of Lowe.** This test stops the
+   pairs that come from the repeated ridge texture.
+6. **RANSAC** on the pairs, with a model of one turn and one movement. The
+   score is the number of agreeing pairs in relation to the available
+   keypoints. Thus the score of a full press and the score of a partial
+   press are comparable.
+7. A template is the group of 8 frames from the enrolment. It needs
+   approximately 74 KB for each finger, and the driver keeps it in the
+   `FpPrint` on the host. The score is the **second best** value of the 8
+   frames. The maximum gives an accidental match eight independent
+   opportunities.
+
+The driver keeps the raw frames and not a group of features. Thus a better
+matcher can use the existing enrolments. This gave an advantage one time
+already, when the algorithm changed completely.
+
+### Methods that the tests rejected, with numbers
+
+- **A normalised cross correlation of the full frames.** The scores of a
+  different finger reached 0.52, and the scores of the correct finger went
+  as low as 0.33. The two groups overlap, thus no threshold is safe. A press
+  on 4.5 mm gives a different part of the skin each time, and a correlation
+  of the full frames cannot correct this.
+- **A Gabor filter before the correlation.** This is the correct method in
+  theory, and the function `FtImageGaborU16` of the vendor does it. But on
+  live presses the margin between the correct finger and a different finger
+  decreased to a factor of 1.3. That code is not in this
+  repository. It can help together with the keypoints.
+- **A condition that the two best frames of the template agree on the
+  position.** This gave scores from 0.07 to 0.33 only, and it decreased the
+  margin from a factor of 4 to a factor of 1.3. The condition is true only
+  in a few comparisons, thus most scores fell to a penalty value.
+
+### The proprietary alternative
+
+The driver of FocalTech also verifies, and the community guides use it:
+[Romk-a/ft9201-linux-setup](https://github.com/Romk-a/ft9201-linux-setup)
+for Astra Linux, and
+[ryenyuku/libfprint-ft9201](https://github.com/ryenyuku/libfprint-ft9201)
+for Arch, also in the
+[AUR](https://aur.archlinux.org/packages/libfprint-ft9201). It is not a
+TOD plugin, although its name has that appearance. It is a complete
+`libfprint` build with their driver in it, and it replaces the system
+library. You cannot call their matcher alone. The library exports 94
+symbols. 87 of them are the standard `fp_*` API, and not one is a `Ft*`
+entry point. Thus there was never a function to use, and the only method is
+a new implementation of the algorithm. This driver is that implementation.
+
+An examination of their driver gave two facts. It holds a firmware image,
+which is the reason why its users never had the "needs a Windows machine"
+fault. And it has one `FpIdEntry` with the PID `0x9338`, which is the
+structure that those guides change to `0x93a9`.
+
+The kernel module that gave the protocol
+([banianitc](https://github.com/banianitc/ft9201-fingerprint-driver))
+never verified a finger. Its README says: *"It won't work with User login
+settings as libfprint integration is not done yet"*.
+
+
+## How to measure it yourself
+
+The tool `tools/ft9201-matcher` measures the matcher of the driver on saved
+frames. It needs no hardware. It holds no copy of the matcher: the script
+`tools/extract-matcher.sh` takes the code out of the driver, thus the tool
+cannot measure an algorithm that the driver no longer uses.
+
+```bash
+cd tools
+./extract-matcher.sh
+gcc -O2 -Wall -Wextra -o ft9201-matcher ft9201-matcher.c \
+    $(pkg-config --cflags --libs glib-2.0) -lm
+./ft9201-matcher  fingerA/frame*.pgm  fingerB/frame*.pgm
+```
+
+Put the frames of one finger in one directory. The name of the parent
+directory gives the group. The tool prints the score of each pair, the
+statistics of the two groups, the error rates against the threshold, and
+the error rate against the number of the frames in the template.
+
+**Collect the frames as the sensor is used.** Put the finger down the same
+way each time. Do not change the position on purpose.
+
+### The threshold at run time
+
+The threshold `FT9201_MATCH_THRESHOLD` has the value 0.06 in the driver.
+The variable of the same name changes it for one measurement, thus you do
+not build the driver again for each value:
+
+```bash
+FT9201_MATCH_THRESHOLD=0.12 fprintd-verify
+```
+
+The driver accepts the value only when the full text is one number between
+0.01 and 1.00. Each other content is a fault, and the driver then keeps
+0.06. The driver writes a warning for each accepted value, and a second
+warning when the value is less than the default. **Use it for a measurement
+only.** A smaller threshold accepts a different finger more often.
+
+### What the measurement gave
+
+The measurement used the 18 frames of one Windows enrolment session, where
+3 frames are one finger and 15 frames are a second finger.
+
+| | |
+|---|---|
+| different finger, largest score | **0.040** |
+| same finger, mean score | 0.048 |
+| same finger, largest score | 0.401 |
+| at the threshold 0.06 | 33 % incorrect reject, 0 of 18 incorrect accept |
+
+The scores of the same finger are **bimodal**. Two frames that share an
+area of the skin score 0.10 to 0.40. Two frames that do not share an area
+score 0.00 to 0.03, which is the level of a different finger. The small
+sensor causes this. It is also the reason for the size of the template.
+
+The rate of the incorrect reject operations falls with the number of the
+frames in the template, and it does not stop:
+
+| frames in template | 2 | 4 | 6 | 8 | 10 | 12 | 14 |
+|---|---|---|---|---|---|---|---|
+| incorrect reject | 93.3 % | 86.7 % | 73.3 % | 60.0 % | 46.7 % | 40.0 % | 40.0 % |
+
+`FT9201_ENROLL_STAGES` was 8 and is now **15** for this reason. That
+session changed the position of the finger at each press, thus these rates
+are worse than the rates of normal use. The shape of the curve is the
+result that matters.
+
+## What other projects measured
+
+- **`Dgmtnz/ft9201-fingerprint-linux`** recalibrated a correlation matcher
+  on a `2808:9338` unit and reports an equal error rate near 0.07 %, with
+  8 of 8 correct fingers accepted and 10 of 10 different fingers rejected.
+  Three values gave that result: the search radius 3 -> 16 pixels, the
+  enrolment stages 5 -> 15, and the threshold 0.30 -> 0.55. That project
+  also gives the warning about the position of the finger, and its numbers
+  are the reason to believe it: a dataset with a changed position gives an
+  equal error rate near 45 % for each matcher.
+- **`NBN-PATRIC/ft9201-libfprint`** measured that NBIS gives at most 3
+  minutiae on a 64 x 80 frame and never matches, and that a correlation
+  over subtemplates separates the two groups only when the finger is in
+  almost the same position. It read in the string table of the vendor
+  library that the vendor stores **more than one subtemplate for each
+  finger**, with the limit `MAX_SUBTEMPLATES_PER_FINGER`.
+- **`narkomart/focaltech-ft9348-linux`** calls the matcher of the vendor
+  from the Linux library. Those functions are in the ELF `.symtab` and not
+  in the dynamic symbols, thus `nm -D` does not show them. The function
+  `focal_VerifyTwoTemplate` takes the **threshold as a parameter**, and it
+  gives a homography matrix and an **overlap area** as separate results.
+  The homography shows that the vendor also uses keypoints and a geometric
+  model, which is the method of this driver.
+
+The overlap area is the useful idea. This driver has no such value. A
+small overlap can give a large ratio of inliers by accident, and that is
+the probable cause of the small distance between the two groups.
