@@ -388,6 +388,45 @@ in, because a bad press and a press that is not on the centre are normal
 use and belong in the rate. A collection that removes each frame with a low
 score measures its own selection, and not the sensor.
 
+### The common area does not improve the matcher, measured
+
+The matcher of the vendor gives the area of the common part of two frames
+as a separate result. This driver has no such value: it divides the number
+of agreeing pairs by the number of keypoints of the smaller side. A
+keypoint outside the common area cannot agree with anything, thus the idea
+was that the score of a partial press is smaller than it must be.
+
+The tool `tools/overlap-experiment` measured two changes against the
+matcher of the driver, on the same 128 frames:
+
+| | equal error rate | separation d' |
+|---|---|---|
+| **the driver, divides by all keypoints** | **4.69 %** | 2.36 |
+| divides by the common area, gate 12 | 5.50 % | **3.23** |
+| divides by the common area, gate 20 | 6.90 % | 3.08 |
+| divides by the common area, gate 30 | 10.16 % | 2.84 |
+| the common area only as a gate, 12 | 4.65 % | 2.36 |
+| the common area only as a gate, 20 | 5.05 % | 2.35 |
+| the common area only as a gate, 30 | 6.15 % | 2.30 |
+
+**Neither change goes into the driver.**
+
+The division by the common area gives a much better `d'` and a worse equal
+error rate. Those two results are not in conflict. `d'` compares the middle
+of the two sets of scores, and it supposes that each set has a normal
+shape. The equal error rate counts the errors that occur. The change moves
+the middle of the two sets apart, and it makes the tails worse. An
+authentication lives in the tail.
+
+The gate alone changes the equal error rate by 0.04 percent at 12
+keypoints, which is one comparison of 1664. Above 12 keypoints it only
+makes the rate worse.
+
+**The reason the division of the driver wins:** it already gives a penalty
+for a small common area. An impostor that finds a motion by accident on a
+small common area gets a large divisor, thus its score stays low. A score
+that is relative to the common area removes exactly that protection.
+
 ## What other projects measured
 
 - **`Dgmtnz/ft9201-fingerprint-linux`** recalibrated a correlation matcher

@@ -148,6 +148,22 @@ sudo /tmp/ft9201-idle-hunt 150                        # press once early, once n
   the matcher does with a turn alone. An angle between 0 and 90 degrees
   also carries the loss from the bilinear interpolation.
 
+- **`overlap-experiment.c`** — measures two changes to the matcher against
+  the matcher of the driver, on the same frames. Both changes use the
+  common area of two frames, which is what the matcher of the vendor gives
+  as a separate result. **Both are worse**, and
+  [`../docs/MATCHING.md`](../docs/MATCHING.md) gives the numbers. The tool
+  stays here because a measured negative result saves the next person the
+  same work.
+
+  ```bash
+  ./extract-matcher.sh
+  gcc -O2 -o overlap-experiment overlap-experiment.c \
+      $(pkg-config --cflags --libs glib-2.0) -lm
+  MIN_OVERLAP=12 ./overlap-experiment  ../samples/dataset-*/*/*.pgm
+  GATE_ONLY=1 MIN_OVERLAP=12 ./overlap-experiment  ../samples/dataset-*/*/*.pgm
+  ```
+
 ## The audible cues
 
 A hardware test needs a person, and that person does not watch the terminal.
