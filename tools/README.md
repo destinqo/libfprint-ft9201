@@ -164,6 +164,20 @@ sudo /tmp/ft9201-idle-hunt 150                        # press once early, once n
   GATE_ONLY=1 MIN_OVERLAP=12 ./overlap-experiment  ../samples/dataset-*/*/*.pgm
   ```
 
+- **`fpn-experiment.c`** — measures a correction of the fixed pattern of
+  the sensor and a stretch of the histogram, against the driver. **Both are
+  worse or equal**, because `ft9201_normalize_local` in the driver already
+  does that work. [`../docs/MATCHING.md`](../docs/MATCHING.md) gives the
+  numbers. A frame of the empty sensor is not needed: the tool takes the
+  median of each pixel over all frames as the estimate.
+
+  ```bash
+  ./extract-matcher.sh
+  gcc -O2 -o fpn-experiment fpn-experiment.c \
+      $(pkg-config --cflags --libs glib-2.0) -lm
+  ./fpn-experiment  ../samples/dataset-*/*/*.pgm
+  ```
+
 ## The audible cues
 
 A hardware test needs a person, and that person does not watch the terminal.

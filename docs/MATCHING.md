@@ -388,6 +388,42 @@ in, because a bad press and a press that is not on the centre are normal
 use and belong in the rate. A collection that removes each frame with a low
 score measures its own selection, and not the sensor.
 
+### The fixed pattern and the stretch do not help either, measured
+
+The project OMGrant/ft9201-libfprint reads a frame of the empty sensor at
+the start of each scan. It takes that frame away from the frame of the
+finger, and it then stretches the histogram to the full range. This driver
+does neither, thus the two steps looked like a gain that costs nothing.
+
+The tool `tools/fpn-experiment` measured them on the same 128 frames:
+
+| | equal error rate | separation d' |
+|---|---|---|
+| **the driver, no change** | **4.69 %** | **2.36** |
+| a stretch of the histogram only | 4.69 % | 2.34 |
+| the fixed pattern only | 5.31 % | 2.06 |
+| the fixed pattern and the stretch | 9.05 % | 2.04 |
+
+**Neither step goes into the driver.**
+
+The reason is in the driver itself. `ft9201_features_new` calls
+`ft9201_normalize_local`, which makes the contrast the same over the frame.
+That step already removes a slow change of the level of the light, and it
+does more than a stretch of the whole frame. The frame that comes after a
+correction of the fixed pattern also has values at 0 and at 255, and those
+values carry no data.
+
+That other project needs the two steps for a different reason: it gives the
+raw frame to the library of the vendor, which expects that preparation.
+
+**One limit of this measurement.** A frame of the empty sensor is not in
+the collection, thus the tool makes an estimate: the median of each pixel
+over all 128 frames. The ridges of 13 different fingers are not the same,
+but the fixed pattern of the sensor is the same in each frame. A true frame
+of the empty sensor can differ from that estimate. It is not likely to
+change the result, because the local normalisation already removes what a
+correction of the fixed pattern removes.
+
 ### The common area does not improve the matcher, measured
 
 The matcher of the vendor gives the area of the common part of two frames
