@@ -299,6 +299,65 @@ sees the change.
 - [`tools/README.md`](tools/README.md) — the diagnostic programs.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to send a change.
 
+## Other work on this sensor
+
+This driver uses what other people found. Each item below says what came
+from that project. Their hardware revisions are not always the same as
+this one, thus a fact from one of them can be incorrect for another.
+
+- **[banianitc/ft9201-fingerprint-driver](https://github.com/banianitc/ft9201-fingerprint-driver)**
+  — the first open work on the protocol, as a kernel module. This driver
+  started from it. A capture of the vendor driver later corrected several
+  steps, and the largest correction is the download of the firmware.
+- **[OMGrant/ft9201-libfprint](https://github.com/OMGrant/ft9201-libfprint)**
+  — a libfprint driver that runs the matcher of the vendor with a small PE
+  loader. It gave three things:
+  - the sequence that reads the type of the sensor,
+  - the register configuration of the MCU after the download,
+  - the idea of a correction of the fixed pattern.
+
+  Its protocol notes come from the Linux driver of FocalTech, which has
+  names for its functions.
+- **[Dgmtnz/ft9201-fingerprint-linux](https://github.com/Dgmtnz/ft9201-fingerprint-linux)**
+  — a recalibration of the matcher for `2808:9338`. It gave three things:
+  - the limit of 64 KB on an instance of GObject,
+  - the rule that a collection of frames needs natural placement,
+  - a second measurement of the number of the enrolment frames, which
+    agrees with the measurement here.
+- **[NBN-PATRIC/ft9201-libfprint](https://github.com/NBN-PATRIC/ft9201-libfprint)**
+  — a 64 x 80 revision that uses vendor request `0x6F` for the bulk read.
+  It also measured the interval of the renewal of the mode, and it found
+  that the vendor keeps more than one subtemplate for each finger.
+- **[narkomart/focaltech-ft9348-linux](https://github.com/narkomart/focaltech-ft9348-linux)**
+  — it calls the matcher of the vendor from the Linux library. Those
+  functions are in the ELF `.symtab` and not in the dynamic symbols. It
+  gave the interface of `focal_VerifyTwoTemplate`, which takes the
+  threshold as a parameter and gives the common area as a separate result.
+- **[Cyd0n1a/ft9201-fingerprint-driver](https://github.com/Cyd0n1a/ft9201-fingerprint-driver)**
+  — the table that maps a chip ID to a variant: `0x9338` is the variant 1,
+  `0x95a8` is the variant 3, and `0x9536` is the variant 6.
+- **[mrrbrilliant/ft9201-static](https://github.com/mrrbrilliant/ft9201-static)**
+  — a public copy of the Linux library of FocalTech. It holds the symbol
+  `FOCALFP_9348_FW_APP`, which is the firmware of the 64 x 80 revision.
+- **[ryenyuku/libfprint-ft9201](https://github.com/ryenyuku/libfprint-ft9201)**
+  and
+  **[Romk-a/ft9201-linux-setup](https://github.com/Romk-a/ft9201-linux-setup)**
+  — the other route: install the closed driver of FocalTech and correct its
+  table of USB identities. That route needs a libfprint with TOD, and it
+  replaces the library of the system with a closed build.
+
+libfprint holds two merge requests for a FocalTech driver, and it has merged
+neither of them. Read them before you send a change of this driver to libfprint:
+
+- **[libfprint!572](https://gitlab.freedesktop.org/libfprint/libfprint/-/merge_requests/572)**
+  by `0xCoDSnet`, open since 2026-03-15.
+- **[libfprint!646](https://gitlab.freedesktop.org/libfprint/libfprint/-/merge_requests/646)**
+  by `Dgmtnz`, open since 2026-08-20, which continues !572.
+
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md) and
+[`docs/MATCHING.md`](docs/MATCHING.md) give the measurements behind each
+item.
+
 ## License
 
 LGPL 2.1 or later, which is the license of libfprint. Refer to the file
