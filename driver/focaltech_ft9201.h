@@ -133,7 +133,7 @@
 #define FT9201_MCU_STATE_MAGIC_5A 0x5a
 #define FT9201_MCU_STATE_BUSY 0x01
 
-/* The register 0x30 holds 0xbb when the capture engine is armed. The
+/* The register 0x30 holds 0xbb after the driver arms the capture engine. The
  * vendor driver writes this value, and the sensor does not set it. A
  * driver that only reads this register sees 0x00 for all time. */
 #define FT9201_CAPTURE_READY_MAGIC 0xbb

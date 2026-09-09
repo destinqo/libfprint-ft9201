@@ -87,7 +87,7 @@ sudo meson install -C build
 sudo systemctl restart fprintd
 ```
 
-Use the option `-Ddoc=false` only when `gtk-doc` is not installed.
+Use the option `-Ddoc=false` only when the system has no `gtk-doc`.
 
 For Fedora there is also an RPM. The directory `packaging/` holds
 `libfprint-ft9201.spec`. That package replaces the `libfprint` package of
@@ -230,9 +230,8 @@ sees the change.
 - **Turn off the USB autosuspend for this device.** The hwdb of Fedora
   starts the autosuspend after 2 seconds, and it makes the fault worse. The
   file `packaging/60-ft9201-fingerprint.rules` does this.
-- **Enrol again after you move the sensor.** The driver handles a turn of
-  the finger, but a new position of the sensor makes the person put the
-  finger down at a new angle. The sensor then sees a different area of the
+- **Enrol again after you move the sensor.** The driver handles a turn of the finger. But a new position of the sensor
+  makes the person put the finger down at a new angle. The sensor then sees a different area of the
   skin. A test gave no match 3 times of 3 with the old template, and a
   match 4 times of 4 after a new enrolment.
 - **A weak press gives a score below the threshold**, and it needs a second

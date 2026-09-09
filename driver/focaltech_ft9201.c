@@ -45,7 +45,7 @@
  *
  * The source of the sequence is a USBPcap capture. It shows the Windows
  * vendor driver during a complete enrolment. From it come the request
- * numbers, the register indices and their order. Each step was then sent again to
+ * numbers, the register indices and their order. The driver then sent each step again to
  * the device until the device gave frames. Some steps below have the note
  * "purpose unknown". Each of those steps is necessary, because the
  * download fails without it, but its effect on the chip is not known.
@@ -80,7 +80,7 @@ struct _FpiDeviceFocaltechFt9201
 
   /* MCU firmware image, read from disk on demand and released as soon as
    * the activation that needed it finishes. NULL whenever the MCU was
-   * already running and no download was required. */
+   * already running, thus the driver made no download. */
   GBytes *fw_data;
   /* Index into ft9201_firmware_script while the download runs. */
   guint   fw_step;
@@ -329,10 +329,10 @@ static const Ft9201Op ft9201_firmware_script[] = {
   FW_CODE_RAM_UNLOCK,
 
   /* The download. The driver gives the length in units of 64 bytes, and
-   * sends the image in one bulk transfer. The maximum packet size of the
-   * endpoint is 16 bytes, and the length of the image is a multiple of
-   * 16. Thus the packets on the bus are equal to the packets of the
-   * vendor driver, which writes 64 bytes at one time. */
+   * sends the image in one bulk transfer. The endpoint takes a maximum of
+   * 16 bytes in one packet. The length of the image is a multiple of 16.
+   * Thus the packets on the bus are equal to the packets of the vendor
+   * driver, which writes 64 bytes at one time. */
   FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_RESET, 0),
   FW_DELAY (22),
   FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_OUT, 0),

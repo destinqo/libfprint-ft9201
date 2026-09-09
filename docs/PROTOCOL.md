@@ -100,14 +100,13 @@ The tests used a physical `2808:93a9` unit with `bcdDevice 0100`.
 
 ## Open questions
 
-The items that the tests confirmed are in the section above. These
-questions are open:
+The items that the tests confirmed are in the section above. These questions have no answer:
 
 - **The function of the undocumented download requests.** The driver sends
   `0x03`, `0x30`, `0x57`, `0x60`, `0x64`, `0x68` and `0x69` in their
-  captured form. The pair `0x65`/`0x66` is a byte read and write operation
-  in the SFR space of the 8051 core, and the section "What other projects
-  found" gives the two locations that carry data. The pair
+  captured form. The pair `0x65`/`0x66` is a byte read and write operation in the SFR space
+  of the 8051 core. The section "What other projects found" gives the two
+  locations that carry data. The pair
   `0x68`/`0x69` does the same in the code RAM. The three writes of `0x55` to
   the location `0xc2` have the appearance of an unlock operation. The
   request `0x57` needs approximately 12.5 ms, thus it probably writes
@@ -214,8 +213,8 @@ renews after 1000 polls of 80 ms, which is 80 seconds.
 **GObject permits an instance of 64 KB.** A driver that holds the enrolment
 frames in its instance structure stops with the message
 `g_type_register_static_simple: assertion 'instance_size <= G_MAXUINT16'
-failed`, and that message does not name the cause. This driver keeps the
-frames in a `GPtrArray` of `GBytes`, thus it is not affected. Keep it that
+failed`, and that message does not name the cause. This driver keeps the frames in a `GPtrArray` of `GBytes`, thus the limit
+does not apply to it. Keep it that
 way.
 
 **The MCU configuration after the upload.** `OMGrant` takes it from the
@@ -411,8 +410,7 @@ Zeroes in each register are **not** proof that the firmware is gone. The AFE
 removes its own power when no step arms it again, and it then gives zeroes
 for each read. A measurement checked the USB error codes, thus these are
 true answers and not failed transfers. A finger starts the AFE for
-approximately half a second. The values are then `0x43` = `01`, `0x1d` =
-`a0` and `0x20` = `a5 5a`. The AFE then gives zeroes again.
+approximately half a second. It then gives `0x43` = `01`, `0x1d` = `a0` and `0x20` = `a5 5a`. The AFE then gives zeroes again.
 
 Therefore the driver sends the `0x22` wake handshake and reads again before
 it makes a decision. The vendor driver does the same. Without this step, an

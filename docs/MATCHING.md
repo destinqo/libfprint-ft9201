@@ -7,37 +7,42 @@ hardware.
 
 ## How it operates
 
-**The verification operates.** A measurement used two different fingers of
-one person:
+**The verification operates.** The measurement of 2026-09-09 used 13
+different fingers of 5 persons, with 128 frames:
 
-| | result | score range |
-| --- | --- | --- |
-| the enrolled finger | **11 of 11 matched** | 0.136 to 0.388 |
-| a different finger | **0 of 18 accepted** | 0.000 to 0.045 |
+| | n | mean | max |
+| --- | --- | --- | --- |
+| the correct finger | 128 | 0.260 | 0.593 |
+| a different finger | 1536 | 0.017 | **0.038** |
 
-The threshold is 0.06. The enrolment completed 8 stages of 8, and the driver
-discarded no frame.
+The threshold is **0.08**. At that threshold the driver rejects the correct
+finger 14 times of 128, and it accepts a different finger 0 times of 1536.
+The equal error rate is 4.69 % and the separation `d'` is 2.36.
 
-**Read the margin with care.** The first group of presses with the different
-finger gave a maximum of 0.036. A later group gave **0.045**. Thus the
-distance to 0.06 is only a factor of 1.33 on that side, against 2.3 on the
-side of the correct finger. The two groups did not overlap in 29
-comparisons. But the maximum of the different finger increased with more
-samples, which is the usual behaviour. This is the reason why these numbers
-are not a security measurement. The 18 comparisons use one pair of fingers
-of one person. They give an upper limit of approximately 15 % on the rate of
-incorrect accept operations, at 95 % confidence.
+The section
+[The measurement of 2026-09-09](#the-measurement-of-2026-09-09-on-13-fingers)
+gives the full result. Two earlier measurements are also in this file, and
+each one says its date. They are smaller, thus the measurement of 13
+fingers replaces them.
 
-The correct description is "the driver separates two fingers clearly", and
-not "the driver is secure". Before you use this sensor as the only
-authentication factor, measure it with more fingers and more persons. If the
-maximum of the different finger continues to increase, increase
+**Read the limit with care.** 0 incorrect accept operations in 1536
+comparisons gives an upper limit of approximately 0.2 % at 95 % confidence.
+That is the limit of what 1536 comparisons can show, and it is not the true
+rate. All 5 persons live in one house. Their skin, their habits and their
+manner of a press are not a sample of a population.
+
+The correct description is "the driver separates the fingers of one house
+clearly", and not "the driver is secure". Before you use this sensor as the
+only authentication factor, measure it with persons from more than one
+house. If the maximum of the different finger increases, increase
 `FT9201_MATCH_THRESHOLD` and write the new numbers in this file.
 
 ### The enrolment technique changes the result
 
-A measurement through `fprintd` used the same finger and three enrolment
-techniques:
+A measurement of 2026-09-07 through `fprintd` used the same finger and
+three enrolment techniques. That enrolment had 8 stages, and an enrolment
+now has 15. The result is the reason for the advice, and it does not change
+with the number of the stages:
 
 | enrolment technique | matched | scores |
 | --- | --- | --- |
@@ -47,14 +52,13 @@ techniques:
 
 Thus **consistency is better than coverage** for this matcher. A verify
 operation compares one press against the template. The image area is only
-4.5 mm. Thus a template from eight different parts of the finger gives one
+4.5 mm. Thus a template from many different parts of the finger gives one
 press only one frame for a comparison. Tell the users to press the same
-position eight times.
+position at each stage.
 
 ### Why the driver does not use minutiae
 
-The image device path of libfprint uses NBIS bozorth3. That path is closed
-for a sensor of this size:
+The image device path of libfprint uses NBIS bozorth3. That path does not work for a sensor of this size:
 
 - A 96x96 frame gives **1 or 2 minutiae**. A measurement used 23 frames and
   each combination of `FPI_IMAGE_PARTIAL`, `FPI_IMAGE_COLORS_INVERTED`, a
@@ -110,11 +114,13 @@ from the literature.
    score is the number of agreeing pairs in relation to the available
    keypoints. Thus the score of a full press and the score of a partial
    press are comparable.
-7. A template is the group of 8 frames from the enrolment. It needs
-   approximately 74 KB for each finger, and the driver keeps it in the
-   `FpPrint` on the host. The score is the **second best** value of the 8
-   frames. The maximum gives an accidental match eight independent
-   opportunities.
+7. A template is the group of `FT9201_ENROLL_STAGES` frames from the
+   enrolment, which is 15. It needs approximately 135 KB for each finger,
+   and the driver keeps it in the `FpPrint` on the host. The score is the
+   **second best** value of those frames. The maximum would give an
+   accidental match one opportunity for each frame. A measurement confirms
+   the rule: the largest score of a different finger is 0.047 for one frame
+   against one frame, but 0.038 for the operation of the driver.
 
 The driver keeps the raw frames and not a group of features. Thus a better
 matcher can use the existing enrolments. This gave an advantage one time
@@ -192,7 +198,7 @@ purpose.
 
 ### The threshold at run time
 
-The threshold `FT9201_MATCH_THRESHOLD` has the value 0.06 in the driver.
+The threshold `FT9201_MATCH_THRESHOLD` has the value 0.08 in the driver.
 The variable of the same name changes it for one measurement, thus you do
 not build the driver again for each value:
 
@@ -202,11 +208,15 @@ FT9201_MATCH_THRESHOLD=0.12 fprintd-verify
 
 The driver accepts the value only when the full text is one number between
 0.01 and 1.00. Each other content is a fault, and the driver then keeps
-0.06. The driver writes a warning for each accepted value, and a second
+0.08. The driver writes a warning for each accepted value, and a second
 warning when the value is less than the default. **Use it for a measurement
 only.** A smaller threshold accepts a different finger more often.
 
-### What the measurement gave
+### The first measurement, 2026-09-09, on frames of a Windows session
+
+This measurement came before the collection of 13 fingers, and the
+measurement of 13 fingers replaces it. It stays here because it is the
+reason for the change of `FT9201_ENROLL_STAGES` from 8 to 15.
 
 The measurement used the 18 frames of one Windows enrolment session. Of
 those frames, 3 are one finger and 15 are a second finger.
@@ -216,7 +226,7 @@ those frames, 3 are one finger and 15 are a second finger.
 | different finger, largest score | **0.040** |
 | same finger, mean score | 0.048 |
 | same finger, largest score | 0.401 |
-| at the threshold 0.06 | 33 % incorrect reject, 0 of 18 incorrect accept |
+| at the threshold 0.06, which the driver used then | 33 % incorrect reject, 0 of 18 incorrect accept |
 
 The scores of the same finger are **bimodal**. Two frames that share an
 area of the skin score 0.10 to 0.40. Two frames that do not share an area
@@ -235,7 +245,11 @@ session changed the position of the finger at each press, thus these rates
 are worse than the rates of normal use. The shape of the curve is the
 result that matters.
 
-### The measurement on the hardware after the change
+### The second measurement, 2026-09-09, of the change to 15 frames
+
+This measurement used 4 presses of one finger and 5 presses of a different
+finger. The measurement of 13 fingers replaces it, and it stays here
+because it shows the effect of the change on the hardware.
 
 A test measured the change from 8 to 15 frames on the sensor. The test made
 one enrolment of 15 stages. It then made 4 presses of the enrolled finger,
@@ -332,8 +346,8 @@ turn of any angle together with a movement, and it puts no limit on the
 angle.
 
 **A measurement confirms this.** The tool `tools/rotation-test` turns each
-of the 128 frames and scores the turned frame against the frame that is not
-turned:
+of the 128 frames. It then scores the turned frame against the original
+frame:
 
 | turn | mean score | | turn | mean score |
 |---|---|---|---|---|
@@ -344,10 +358,10 @@ turned:
 | 20 deg | 0.629 | | | |
 
 A turn of 90 degrees keeps 99.7 % of the score. That turn moves each pixel
-to the position of a different pixel, thus it needs no interpolation. The
-lower scores between 0 and 90 degrees come from the bilinear interpolation,
-which makes the image less sharp, lowers the gradients and moves the
-keypoints. They are not a fault of the matcher.
+to the position of a different pixel, thus it needs no interpolation. The lower scores between 0 and 90 degrees come from the bilinear
+interpolation. That interpolation makes the image less sharp, it lowers the
+gradients, and it moves the keypoints. Those scores are not a fault of the
+matcher.
 
 The worst angle is 45 degrees, and it still gives 0.389. That is 4.9 times
 the threshold of 0.08, and 10 times the largest score of a different
@@ -355,9 +369,8 @@ finger. Thus a turn alone does not stop a match, and a search over angles
 would add nothing. A matcher that compares whole images needs such a
 search; this one calculates the angle from the pairs of keypoints.
 
-A change of the **position of the sensor** is a different thing. The person
-who uses it then puts the finger down at a new angle, and the sensor sees a
-different area of the skin through the same 96 x 96 window. That is a loss
+A change of the **position of the sensor** is a different thing. The person who uses it then puts the finger down at a new angle. The sensor
+then sees a different area of the skin through the same 96 x 96 window. That is a loss
 of the common area, and not a turn.
 
 A test showed this. The sensor moved to a longer cable, which changed the
@@ -378,14 +391,13 @@ Enrol again after a change of the position of the sensor.
 ### Why the incorrect reject rate is an upper limit
 
 Six frames of 128 score less than 0.05 against every other frame of their
-own finger. A frame like that is a bad press, a finger that is not on the
-centre of the sensor, or a frame of the wrong finger. The score alone does
+own finger. Three causes give a frame like that: a bad press, a finger away from the
+centre of the sensor, or the wrong finger. The score alone does
 not separate those causes.
 
 Only one frame came out of the set: the person who collected the frames saw
-the first press of one finger go to a different finger. The other five stay
-in, because a bad press and a press that is not on the centre are normal
-use and belong in the rate. A collection that removes each frame with a low
+the first press of one finger go to a different finger. The other five stay in. A bad press and a press away from the centre are
+normal use, thus they belong in the rate. A collection that removes each frame with a low
 score measures its own selection, and not the sensor.
 
 ### The fixed pattern and the stretch do not help either, measured
@@ -428,9 +440,8 @@ correction of the fixed pattern removes.
 
 The matcher of the vendor gives the area of the common part of two frames
 as a separate result. This driver has no such value: it divides the number
-of agreeing pairs by the number of keypoints of the smaller side. A
-keypoint outside the common area cannot agree with anything, thus the idea
-was that the score of a partial press is smaller than it must be.
+of agreeing pairs by the number of keypoints of the smaller side. A keypoint outside the common area cannot agree with anything. Thus the idea
+was that a partial press gets a score that is too small.
 
 The tool `tools/overlap-experiment` measured two changes against the
 matcher of the driver, on the same 128 frames:
