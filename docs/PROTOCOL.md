@@ -211,6 +211,13 @@ measured 1 finger detection in 4445 polls with no renewal. It then measured
 24 detections with a renewal after each 30 polls of 30 ms. This driver
 renews after 1000 polls of 80 ms, which is 80 seconds.
 
+**GObject permits an instance of 64 KB.** A driver that holds the enrolment
+frames in its instance structure stops with the message
+`g_type_register_static_simple: assertion 'instance_size <= G_MAXUINT16'
+failed`, and that message does not name the cause. This driver keeps the
+frames in a `GPtrArray` of `GBytes`, thus it is not affected. Keep it that
+way.
+
 **The MCU configuration after the upload.** `OMGrant` takes it from the
 Linux driver of FocalTech, where the functions have the names
 `InitMcuConfig` and `SwitchNextSensorWorkMode`. The registers are `0x01`,

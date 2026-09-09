@@ -260,6 +260,14 @@
  *
  * A template that an earlier version wrote holds 8 frames. It stays valid.
  * A verify operation reads the frames that the template holds.
+ *
+ * Keep the frames on the heap. GObject permits an instance of 64 KB, and
+ * 15 frames of 96 x 96 are 138240 bytes. A driver that holds them in the
+ * instance structure stops with the message
+ * "g_type_register_static_simple: assertion 'instance_size <=
+ * G_MAXUINT16' failed", which does not name the cause. This driver keeps
+ * them in a GPtrArray of GBytes, thus the instance stays small. The
+ * project Dgmtnz/ft9201-fingerprint-linux found this limit.
  */
 #define FT9201_ENROLL_STAGES 15
 

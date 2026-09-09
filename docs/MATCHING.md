@@ -264,6 +264,14 @@ authentication factor.
   matcher accepted 8 correct fingers of 8, and it rejected 10 different
   fingers of 10. Three values gave that result: the search radius 3 -> 16
   pixels, the enrolment stages 5 -> 15, and the threshold 0.30 -> 0.55.
+
+  Its measurement of the stage count agrees with the measurement of this
+  driver, on different hardware and with a different matcher. At the search
+  radius 16 it gives these equal error rates: 7.4 % for 5 templates, 1.6 %
+  for 10, and 0.07 % for 15. That project also sets its threshold above the
+  value that gives the fewest incorrect reject operations, for the same
+  reason as this driver: an estimate of the incorrect accept rate from few
+  fingers is optimistic.
   That project also gives the warning about the position of the finger. Its
   numbers are the reason to believe that warning. A dataset with a changed
   position gives an equal error rate near 45 % for each matcher.
