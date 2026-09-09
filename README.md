@@ -59,17 +59,53 @@ cold start with no firmware passes, and the sensor operates for the login,
 the full list of what the tests confirmed, what they did not confirm, and
 the questions that stay open.
 
-## How to build on Fedora 44
+## How to build
+
+The driver goes into the source of libfprint, thus you build libfprint
+again. The packages below give what meson needs.
+
+Each name in the three lists exists in the index of that distribution. Only
+the list for Fedora also has a build behind it: it comes from the
+`BuildRequires` of the RPM, and that RPM builds on the machine of the
+author. Tell us when a name is not correct for your distribution.
+
+**Fedora and RHEL:**
 
 ```bash
-sudo dnf install meson ninja-build gcc git \
-    glib2-devel libgusb-devel nss-devel pixman-devel \
+sudo dnf install meson ninja-build gcc gcc-c++ git \
+    glib2-devel libgusb-devel nss-devel pixman-devel cairo-devel \
+    systemd-devel openssl-devel libgudev-devel \
     gobject-introspection-devel gtk-doc
+```
 
-# Use the version that Fedora 44 supplies. The patch is for the driver
-# registration of v1.94.100. libfprint changed that layout after 1.90:
-# it now makes default_drivers from a drivers_info dictionary. Thus the
-# patch does not apply to all versions.
+**Debian and Ubuntu:**
+
+```bash
+sudo apt install meson ninja-build gcc g++ git \
+    libglib2.0-dev libgusb-dev libnss3-dev libpixman-1-dev libcairo2-dev \
+    libsystemd-dev libssl-dev libgudev-1.0-dev \
+    libgirepository1.0-dev gtk-doc-tools
+```
+
+**Arch:**
+
+```bash
+sudo pacman -S --needed meson ninja gcc git \
+    glib2 libgusb nss pixman cairo systemd-libs openssl libgudev \
+    gobject-introspection gtk-doc
+```
+
+`openssl` and `libgudev` are necessary. The driver does not use them, but
+the drivers `uru4000` and `elanspi` do, and meson stops with an error when
+they are absent.
+
+Then build:
+
+```bash
+# Use the version v1.94.100, which Fedora 44 also supplies. The patch is
+# for the driver registration of that version. libfprint changed that
+# layout after 1.90: it now makes default_drivers from a drivers_info
+# dictionary. Thus the patch does not apply to each version.
 git clone --depth 1 -b v1.94.100 \
     https://gitlab.freedesktop.org/libfprint/libfprint.git
 cd libfprint
@@ -89,11 +125,24 @@ sudo systemctl restart fprintd
 
 Use the option `-Ddoc=false` only when the system has no `gtk-doc`.
 
-For Fedora there is also an RPM. The directory `packaging/` holds
+**Fedora also has an RPM.** The directory `packaging/` holds
 `libfprint-ft9201.spec`. That package replaces the `libfprint` package of
-Fedora, and it keeps the driver through a system update better than a `meson
-install`. Refer to "How to keep the driver after an update".
+Fedora, and it keeps the driver through a system update better than a
+`meson install`. Refer to "How to keep the driver after an update". Debian,
+Ubuntu and Arch have no such package, thus they use the build above.
 
+### There is no TOD module
+
+Debian, Ubuntu and Arch also give a `libfprint-tod`, which loads a driver
+as a module and needs no build of libfprint. **This project has no such
+module.** TOD exists for a driver that a person cannot build. This
+driver has its source here, thus it needs no such module. Its correct place is the source of
+libfprint, where each distribution gets it.
+
+If you want the TOD route now, `Dgmtnz/ft9201-fingerprint-linux` holds a
+PKGBUILD for `libfprint-tod-ft9201` for Arch. That package uses a different
+driver for a different device of the same family, thus it is a start and
+not an answer.
 
 ## The MCU firmware
 
