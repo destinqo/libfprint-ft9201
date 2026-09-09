@@ -177,20 +177,20 @@ install -D -m 0644 %{SOURCE4} \
 
 %changelog
 * Wed Sep 09 2026 <you> - 1.94.100-5
-- Enrolment now takes 15 frames and not 8. A measurement of the rate of
-  the incorrect reject operations against the size of the template gave
-  the larger value, and the rate does not stop to fall before 14 frames.
-  On the hardware the correct finger now scores 0.239 to 0.357 and a
-  different finger scores 0.024 to 0.027, thus the distance between the
+- Enrolment now takes 15 frames and not 8. A measurement gave the larger
+  value. It scored each saved frame against a template of the other
+  frames, and the rate of the incorrect reject operations falls until 14
+  frames. On the hardware the correct finger now scores 0.239 to 0.357.
+  A different finger scores 0.024 to 0.027. Thus the distance between the
   two groups increases from 3.0 to 8.9 times. A template that an earlier
-  version wrote holds 8 frames and stays valid.
+  version wrote holds 8 frames, and it stays valid.
 - The variable FT9201_MATCH_THRESHOLD changes the match threshold at run
   time, for a measurement. The driver accepts only one number between
-  0.01 and 1.00, it keeps the compiled default of 0.06 for each other
-  content, and it writes a warning for each accepted value.
+  0.01 and 1.00. It keeps the compiled default of 0.06 for each other
+  content. It writes a warning for each accepted value.
 - The driver decodes the sensor type that the firmware download already
   read from the SFR space, and it puts the type in the log. This unit is
-  the type 3 and it reports 96 x 96, thus the installed firmware image is
+  the type 3, and it reports 96 x 96. Thus the installed firmware image is
   correct for it.
 - The documentation moves from one file of 787 lines to a README of 246
   lines, docs/PROTOCOL.md and docs/MATCHING.md.
