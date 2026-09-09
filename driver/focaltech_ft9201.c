@@ -53,6 +53,7 @@
 
 #define FP_COMPONENT "focaltech_ft9201"
 
+#include <errno.h>
 #include <math.h>
 
 #include "drivers_api.h"
@@ -1522,10 +1523,10 @@ ft9201_match_template (GPtrArray *template_frames, const guint8 *probe,
   if (scored == 1)
     return first;
 
-  /* The function takes the second best score and not the best score. The
-   * maximum of eight stored frames gives an accidental match eight
-   * independent opportunities. The correct finger matches more than one
-   * frame. */
+  /* The function takes the second best score and not the best score. Each
+   * stored frame gives an accidental match one more opportunity, and a
+   * template holds FT9201_ENROLL_STAGES frames. The correct finger matches
+   * more than one frame. */
   return second;
 }
 
@@ -1646,6 +1647,89 @@ ft9201_template_unpack (FpPrint *print, guint8 *out_w, guint8 *out_h,
  * the change in the README.
  */
 #define FT9201_MATCH_THRESHOLD 0.06f
+
+/*
+ * The limits of the threshold. A value outside these limits is a fault,
+ * and the driver then uses FT9201_MATCH_THRESHOLD. The lower limit keeps
+ * a threshold that no measured impostor score has reached.
+ */
+#define FT9201_MATCH_THRESHOLD_MIN 0.01f
+#define FT9201_MATCH_THRESHOLD_MAX 1.00f
+
+/* The name of the variable that changes the threshold for a measurement. */
+#define FT9201_MATCH_THRESHOLD_ENV "FT9201_MATCH_THRESHOLD"
+
+/*
+ * Gives the threshold that the verify and identify operations use.
+ *
+ * The threshold is a security parameter. A measurement of the error rates
+ * must change it many times, and a rebuild for each value is expensive.
+ * Thus the variable FT9201_MATCH_THRESHOLD can change it at run time.
+ *
+ * The driver treats the content of that variable as unknown data. It
+ * accepts the value only when the full text is one number, and when that
+ * number is inside the limits above. Each other content is a fault, and
+ * the driver then keeps the compiled default.
+ *
+ * The driver writes a warning for each accepted value. An operator must
+ * see in the log that the authentication does not use the default.
+ */
+static gfloat
+ft9201_match_threshold (void)
+{
+  static gfloat value = FT9201_MATCH_THRESHOLD;
+  static gboolean known = FALSE;
+  const gchar *text;
+  gchar *end = NULL;
+  gdouble parsed;
+
+  if (known)
+    return value;
+
+  known = TRUE;
+
+  text = g_getenv (FT9201_MATCH_THRESHOLD_ENV);
+  if (text == NULL || *text == '\0')
+    return value;
+
+  errno = 0;
+  parsed = g_ascii_strtod (text, &end);
+
+  /* g_ascii_strtod ignores a space before the number. The driver does not,
+   * because it accepts one number and no other character. */
+  if (g_ascii_isspace (text[0]) ||
+      errno != 0 || end == NULL || *end != '\0' || !isfinite (parsed) ||
+      parsed < (gdouble) FT9201_MATCH_THRESHOLD_MIN ||
+      parsed > (gdouble) FT9201_MATCH_THRESHOLD_MAX)
+    {
+      fp_warn ("FT9201 ignores %s: the value is not a number between "
+               "%.2f and %.2f. The driver uses the threshold %.2f.",
+               FT9201_MATCH_THRESHOLD_ENV,
+               (gdouble) FT9201_MATCH_THRESHOLD_MIN,
+               (gdouble) FT9201_MATCH_THRESHOLD_MAX,
+               (gdouble) value);
+      return value;
+    }
+
+  value = (gfloat) parsed;
+
+  if (value < FT9201_MATCH_THRESHOLD)
+    {
+      fp_warn ("FT9201 uses the match threshold %.3f from %s. The value is "
+               "less than the default %.2f, thus it accepts a different "
+               "finger more often. Use it for a measurement only.",
+               (gdouble) value, FT9201_MATCH_THRESHOLD_ENV,
+               (gdouble) FT9201_MATCH_THRESHOLD);
+    }
+  else
+    {
+      fp_warn ("FT9201 uses the match threshold %.3f from %s. The default "
+               "is %.2f.", (gdouble) value, FT9201_MATCH_THRESHOLD_ENV,
+               (gdouble) FT9201_MATCH_THRESHOLD);
+    }
+
+  return value;
+}
 
 /****** CAPTURE ******/
 
@@ -2135,11 +2219,11 @@ capture_ssm_done (FpiSsm *ssm, FpDevice *dev, GError *error)
 
         score = ft9201_match_template (frames, self->frame, w, h);
         fp_dbg ("FT9201 verify score %.3f (threshold %.2f)",
-                (gdouble) score, (gdouble) FT9201_MATCH_THRESHOLD);
+                (gdouble) score, (gdouble) ft9201_match_threshold ());
         ft9201_reset_task (self);
 
         fpi_device_verify_report (dev,
-                                  score >= FT9201_MATCH_THRESHOLD ?
+                                  score >= ft9201_match_threshold () ?
                                   FPI_MATCH_SUCCESS : FPI_MATCH_FAIL,
                                   NULL, NULL);
         fpi_device_verify_complete (dev, NULL);
@@ -2182,11 +2266,11 @@ capture_ssm_done (FpiSsm *ssm, FpDevice *dev, GError *error)
           }
 
         fp_dbg ("FT9201 identify best score %.3f (threshold %.2f)",
-                (gdouble) best, (gdouble) FT9201_MATCH_THRESHOLD);
+                (gdouble) best, (gdouble) ft9201_match_threshold ());
         ft9201_reset_task (self);
 
         fpi_device_identify_report (dev,
-                                    best >= FT9201_MATCH_THRESHOLD ? best_print : NULL,
+                                    best >= ft9201_match_threshold () ? best_print : NULL,
                                     NULL, NULL);
         fpi_device_identify_complete (dev, NULL);
         break;
