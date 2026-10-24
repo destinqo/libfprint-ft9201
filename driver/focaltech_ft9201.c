@@ -85,6 +85,12 @@ struct _FpiDeviceFocaltechFt9201
   /* Index into ft9201_firmware_script while the download runs. */
   guint   fw_step;
 
+  /* System suspend. The sensor can lose its power and its firmware during
+   * a suspend, thus the capture loop activates the sensor again after a
+   * resume before it polls again. */
+  gboolean suspended;
+  gboolean needs_reactivate;
+
   /* Capture bookkeeping. */
   FpiSsm  *task_ssm;             /* the running action, or NULL when idle */
   guint    spurious_polls;       /* finger reported but frame not usable */
@@ -764,6 +770,26 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
               self->sensor_type);
       if (self->sensor_width == 0 || self->sensor_height == 0)
         {
+          /* A test saw this on a warm open, after a verify that ran for
+           * more than one hour. A download always gave a working sensor
+           * in the tests, thus the driver sends the firmware again one
+           * time before it stops. */
+          if (!self->fw_reloaded)
+            {
+              GError *error = NULL;
+
+              fp_warn ("FT9201 sensor reported zero dimensions; sending the "
+                       "firmware again");
+              self->fw_reloaded = TRUE;
+              if (!ft9201_load_firmware (self, &error))
+                {
+                  fpi_ssm_mark_failed (ssm, error);
+                  return;
+                }
+              self->fw_step = 0;
+              fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
+              return;
+            }
           ft9201_recover_and_fail (ssm, dev,
                                    fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
                                                              "Sensor reported zero dimensions"));
@@ -1886,6 +1912,11 @@ enum capture_states {
   CAP_KEEPALIVE_VERIFY_PRESENT,
   CAP_KEEPALIVE_VERIFY_RESUMED,
   CAP_KEEPALIVE_VERIFY_CHECK,
+  /* After a system resume, the capture loop runs the activation again as a
+   * child machine, and then polls again. These two states must stay
+   * together: the child machine continues with the next state. */
+  CAP_REACTIVATE,
+  CAP_REACTIVATE_DONE,
   CAP_NUM_STATES,
 };
 
@@ -1962,6 +1993,17 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
   switch (fpi_ssm_get_cur_state (ssm))
     {
     case CAP_POLL_FINGER:
+      /* No USB traffic while the system suspends. */
+      if (self->suspended)
+        {
+          fpi_ssm_jump_to_state_delayed (ssm, CAP_POLL_FINGER, 500);
+          break;
+        }
+      if (self->needs_reactivate)
+        {
+          fpi_ssm_jump_to_state (ssm, CAP_REACTIVATE);
+          break;
+        }
       /* This vendor request reports a finger. The driver does not poll the
        * register 0x1d for this purpose. */
       ft9201_ctrl_in (ssm, dev, FT9201_REQ_GET_SENSOR_INT_PORT_STATES,
@@ -2227,6 +2269,23 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
         fpi_ssm_jump_to_state_delayed (ssm, CAP_POLL_FINGER,
                                        FT9201_POLL_INTERVAL_MS);
       break;
+
+    case CAP_REACTIVATE:
+      fp_dbg ("FT9201 activating the sensor again after a system resume");
+      self->needs_reactivate = FALSE;
+      self->retry_count = 0;
+      self->rearm_retries = 0;
+      self->idle_polls = 0;
+      self->fw_reloaded = FALSE;
+      self->fw_step = 0;
+      fpi_ssm_start_subsm (ssm, fpi_ssm_new (dev, activate_run_state,
+                                             ACTIVATE_NUM_STATES));
+      break;
+
+    case CAP_REACTIVATE_DONE:
+      g_clear_pointer (&self->fw_data, g_bytes_unref);
+      fpi_ssm_jump_to_state (ssm, CAP_POLL_FINGER);
+      break;
     }
 }
 
@@ -2455,6 +2514,8 @@ dev_open (FpDevice *dev)
   self->retry_count = 0;
   self->fw_step = 0;
   self->fw_reloaded = FALSE;
+  self->suspended = FALSE;
+  self->needs_reactivate = FALSE;
   self->task_ssm = fpi_ssm_new (dev, activate_run_state, ACTIVATE_NUM_STATES);
   fpi_ssm_start (self->task_ssm, activate_ssm_done);
 }
@@ -2493,6 +2554,35 @@ static void
 dev_capture (FpDevice *dev)
 {
   ft9201_start_capture (dev, FPI_DEVICE_ACTION_CAPTURE);
+}
+
+/*
+ * System suspend and resume during an action. Without these handlers
+ * libfprint cancels the action ("Cannot run while suspended"), and a lock
+ * screen that waits for a finger does not get the sensor back after the
+ * resume. The capture loop stops its USB traffic during the suspend, and
+ * activates the sensor again after the resume, because the sensor can lose
+ * its firmware. libfprint also enables USB remote wakeup for a device that
+ * suspends during an action, and a touch then wakes the system.
+ */
+static void
+dev_suspend (FpDevice *dev)
+{
+  FpiDeviceFocaltechFt9201 *self = FPI_DEVICE_FOCALTECH_FT9201 (dev);
+
+  self->suspended = TRUE;
+  self->needs_reactivate = TRUE;
+  fpi_device_suspend_complete (dev, NULL);
+}
+
+static void
+dev_resume (FpDevice *dev)
+{
+  FpiDeviceFocaltechFt9201 *self = FPI_DEVICE_FOCALTECH_FT9201 (dev);
+
+  self->suspended = FALSE;
+  self->needs_reactivate = TRUE;
+  fpi_device_resume_complete (dev, NULL);
 }
 
 static const FpIdEntry id_table[] = {
@@ -2534,6 +2624,13 @@ fpi_device_focaltech_ft9201_class_init (FpiDeviceFocaltechFt9201Class *klass)
   dev_class->id_table = id_table;
   dev_class->scan_type = FP_SCAN_TYPE_PRESS;
   dev_class->nr_enroll_stages = FT9201_ENROLL_STAGES;
+  /* The sensor can wait for a finger for all time. While it waits, the
+   * host only polls the request 0x43, and the sensor does its own finger
+   * detection. The vendor driver also polls without a time limit. With the
+   * default temperature model, a lock screen that waits for a finger
+   * stops the sensor after 3 minutes ("Device disabled to prevent
+   * overheating"), and the sensor then needs 9 minutes without use. */
+  dev_class->temp_hot_seconds = -1;
 
   /* The match operation occurs on the host and not in the sensor. Thus the
    * driver reports no storage feature. fprintd keeps the templates. */
@@ -2547,4 +2644,6 @@ fpi_device_focaltech_ft9201_class_init (FpiDeviceFocaltechFt9201Class *klass)
   dev_class->verify = dev_verify;
   dev_class->identify = dev_identify;
   dev_class->capture = dev_capture;
+  dev_class->suspend = dev_suspend;
+  dev_class->resume = dev_resume;
 }
