@@ -82,8 +82,21 @@ struct _FpiDeviceFocaltechFt9201
    * the activation that needed it finishes. NULL whenever the MCU was
    * already running, thus the driver made no download. */
   GBytes *fw_data;
-  /* Index into ft9201_firmware_script while the download runs. */
-  guint   fw_step;
+  /* The script that the download runs, and the index into it. The
+   * download starts with ft9201_firmware_script, and the branch step
+   * switches to the script of the variant. */
+  const struct _Ft9201Op *fw_script;
+  guint                   fw_step;
+  /* The last byte that a script read, for a read-modify-write step. */
+  guint8                  fw_saved;
+
+  /* TRUE for the second hardware variant. Refer to FT9201_FIRMWARE_PATH_B.
+   * The download selects the variant, and the value stays valid for the
+   * life of the device object, thus a warm open uses it too. */
+  gboolean variant_b;
+  gboolean variant_known;
+  /* Set by the read-back step when the code RAM differs from the image. */
+  gboolean fw_verify_failed;
 
   /* Capture bookkeeping. */
   FpiSsm  *task_ssm;             /* the running action, or NULL when idle */
@@ -242,9 +255,13 @@ typedef enum {
   FT9201_OP_DELAY,      /* value = milliseconds */
   FT9201_OP_SEND_PROBE, /* bulk-out the 4-byte probe word */
   FT9201_OP_SEND_IMAGE, /* bulk-out the whole firmware image */
+  FT9201_OP_BRANCH,     /* select the variant from the last answer */
+  FT9201_OP_IN_SAVE,    /* as FT9201_OP_IN, and keep byte 0 of the answer */
+  FT9201_OP_OUT_SET_BIT0, /* vendor control OUT with value = saved | 0x01 */
+  FT9201_OP_VERIFY_IMAGE, /* bulk-in value bytes, compare with the image */
 } Ft9201OpKind;
 
-typedef struct
+typedef struct _Ft9201Op
 {
   guint8  kind;
   guint8  request;
@@ -309,6 +326,14 @@ static const Ft9201Op ft9201_firmware_script[] = {
   FW_OUT (FT9201_REQ_UNKNOWN_03, 0x0001, 0x00a4),
   FW_IN (FT9201_REQ_BULK_CHECK, 0, FT9201_FW_PROBE_ADDR, 4),
 
+  /* The two variants differ from this point. The branch step reads the
+   * answer of the check above and continues with the script of the
+   * variant. Refer to FT9201_FIRMWARE_PATH_B. */
+  { FT9201_OP_BRANCH, 0, 0, 0, 0 },
+  FW_END,
+};
+
+static const Ft9201Op ft9201_firmware_script_a[] = {
   /* Writes to five special function registers of the 8051 core. Purpose
    * unknown. */
   FW_OUT (FT9201_REQ_MCU_SYNC, 0, 0),
@@ -352,6 +377,60 @@ static const Ft9201Op ft9201_firmware_script[] = {
   FW_END,
 };
 
+/* The download of the second variant, from the capture of the vendor
+ * driver on that unit. The delays are the measured gaps. */
+static const Ft9201Op ft9201_firmware_script_b[] = {
+  /* The same SFR group as the first variant, through the requests 0x68
+   * and 0x69. The vendor writes back the value that it read with bit 0
+   * set. The location 0x00f3 gives the type. */
+  FW_OUT (FT9201_REQ_MCU_SYNC, 0, 0),
+  { FT9201_OP_IN_SAVE, FT9201_REQ_CODE_RAM_READ, 0, 0x00c8, 4 },
+  { FT9201_OP_OUT_SET_BIT0, FT9201_REQ_CODE_RAM_WRITE, 0, 0x00c8, 0 },
+  FW_OUT (FT9201_REQ_CODE_RAM_WRITE, 0x001d, 0x00f1),
+  { FT9201_OP_IN_SAVE, FT9201_REQ_CODE_RAM_READ, 0, FT9201_SFR_TYPE_LATCH, 4 },
+  { FT9201_OP_OUT_SET_BIT0, FT9201_REQ_CODE_RAM_WRITE, 0, FT9201_SFR_TYPE_LATCH, 0 },
+  FW_IN (FT9201_REQ_CODE_RAM_READ, 0, FT9201_SFR_CHIP_TYPE, 4),
+  FW_IN (FT9201_REQ_GET_SUI_VERSION, 0, 0, 4),
+
+  FW_PREPARE_MCU (11),
+  FW_IN (FT9201_REQ_READ_REGISTER, 0, FT9201_REG_MCU_SENSOR_STATUS, 4),
+
+  /* One unlock group, and then five writes with the request 0x03.
+   * Purpose unknown. */
+  FW_CODE_RAM_UNLOCK,
+  FW_OUT (FT9201_REQ_UNKNOWN_03, 0x00ff, 0x00c8),
+  FW_OUT (FT9201_REQ_UNKNOWN_03, 0x00ff, 0x00ca),
+  FW_OUT (FT9201_REQ_UNKNOWN_03, 0x00ff, 0x00cb),
+  FW_OUT (FT9201_REQ_UNKNOWN_03, 0x00bf, 0x00b9),
+  FW_OUT (FT9201_REQ_UNKNOWN_03, 0x00ff, 0x00b9),
+
+  FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_RESET, 0),
+  FW_DELAY (16),
+  FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_OUT, 0),
+  FW_OUT (FT9201_REQ_SET_BULK_TRANSFER, FT9201_FW_CHUNK_SIZE,
+          FT9201_FW_LOAD_ADDR),
+  FW_SEND_IMAGE,
+  FW_DELAY (17),
+
+  /* The vendor reads the image back from the code RAM before the commit.
+   * The driver compares it with the file. On a difference it sends the
+   * firmware again one time, and then stops. A test saw one difference
+   * in the first activation after a new connection. */
+  FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_RESET, 0),
+  FW_DELAY (16),
+  FW_OUT (FT9201_REQ_SET_BULK_MODE, FT9201_BULK_MODE_IN, 0),
+  FW_OUT (FT9201_REQ_SET_BULK_TRANSFER, FT9201_FW_B_IMAGE_SIZE,
+          FT9201_FW_LOAD_ADDR),
+  { FT9201_OP_VERIFY_IMAGE, 0, FT9201_FW_B_IMAGE_SIZE, 0, 0 },
+
+  FW_OUT (FT9201_REQ_FIRMWARE_COMMIT, 0, 0),
+  FW_DELAY (37),
+  FW_OUT (FT9201_REQ_FIRMWARE_COMMIT, 0, 0),
+  FW_DELAY (93),
+
+  FW_END,
+};
+
 /* The probe word for the address FT9201_FW_PROBE_ADDR. It is not const,
  * because fpi_usb_transfer_fill_bulk_full() takes a buffer that is not
  * const. That function marks the buffer as read only, and this driver
@@ -364,12 +443,14 @@ static gboolean
 ft9201_load_firmware (FpiDeviceFocaltechFt9201 *self, GError **error)
 {
   g_autofree gchar *data = NULL;
+  const gchar *path = self->variant_b ? FT9201_FIRMWARE_PATH_B :
+                      FT9201_FIRMWARE_PATH;
   gsize len = 0;
 
   if (self->fw_data != NULL)
     return TRUE;
 
-  if (!g_file_get_contents (FT9201_FIRMWARE_PATH, &data, &len, NULL))
+  if (!g_file_get_contents (path, &data, &len, NULL))
     {
       g_propagate_error (error,
                          fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
@@ -378,7 +459,7 @@ ft9201_load_firmware (FpiDeviceFocaltechFt9201 *self, GError **error)
                                                    "persistent firmware, so the image has to be "
                                                    "extracted from the vendor driver and installed "
                                                    "at that path -- see the driver README.",
-                                                   FT9201_FIRMWARE_PATH));
+                                                   path));
       return FALSE;
     }
 
@@ -387,20 +468,21 @@ ft9201_load_firmware (FpiDeviceFocaltechFt9201 *self, GError **error)
    * the value that it gives to the device. It does not send an unknown
    * quantity of data to the code RAM of the sensor. */
   if (len < FT9201_FW_MIN_SIZE || len > FT9201_FW_MAX_SIZE ||
-      len % FT9201_FW_CHUNK_SIZE != 0)
+      len % FT9201_FW_CHUNK_SIZE != 0 ||
+      (self->variant_b && len < FT9201_FW_B_IMAGE_SIZE))
     {
       g_propagate_error (error,
                          fpi_device_error_new_msg (FP_DEVICE_ERROR_DATA_INVALID,
                                                    "%s is not a usable firmware image: %"
                                                    G_GSIZE_FORMAT " bytes, expected a multiple of %d "
                                                    "between %d and %d.",
-                                                   FT9201_FIRMWARE_PATH, len,
+                                                   path, len,
                                                    FT9201_FW_CHUNK_SIZE,
                                                    FT9201_FW_MIN_SIZE, FT9201_FW_MAX_SIZE));
       return FALSE;
     }
 
-  fp_dbg ("FT9201 firmware %s: %" G_GSIZE_FORMAT " bytes", FT9201_FIRMWARE_PATH, len);
+  fp_dbg ("FT9201 firmware %s: %" G_GSIZE_FORMAT " bytes", path, len);
   self->fw_data = g_bytes_new_take (g_steal_pointer (&data), len);
   return TRUE;
 }
@@ -413,6 +495,51 @@ ft9201_bulk_out_done (FpiUsbTransfer *transfer, FpDevice *dev,
     fpi_ssm_mark_failed (transfer->ssm, error);
   else
     fpi_ssm_next_state (transfer->ssm);
+}
+
+/* Compares the image that the second variant gives back from its code RAM
+ * with the image that the driver sent. */
+static void
+ft9201_verify_image_cb (FpiUsbTransfer *transfer, FpDevice *dev,
+                        gpointer user_data, GError *error)
+{
+  FpiDeviceFocaltechFt9201 *self = FPI_DEVICE_FOCALTECH_FT9201 (dev);
+  gsize fw_len = 0;
+  const guint8 *fw = g_bytes_get_data (self->fw_data, &fw_len);
+
+  if (error)
+    {
+      fpi_ssm_mark_failed (transfer->ssm, error);
+      return;
+    }
+
+  self->fw_verify_failed = FALSE;
+  if ((gsize) transfer->actual_length != transfer->length ||
+      (gsize) transfer->actual_length > fw_len)
+    {
+      fp_warn ("FT9201 firmware read-back gave %" G_GSIZE_FORMAT " bytes, "
+               "expected %" G_GSIZE_FORMAT,
+               (gsize) transfer->actual_length, (gsize) transfer->length);
+      self->fw_verify_failed = TRUE;
+    }
+  else
+    {
+      for (gsize i = 0; i < (gsize) transfer->actual_length; i++)
+        if (transfer->buffer[i] != fw[i])
+          {
+            fp_warn ("FT9201 firmware read-back differs at offset 0x%04"
+                     G_GSIZE_MODIFIER "x: %02x, expected %02x",
+                     i, transfer->buffer[i], fw[i]);
+            self->fw_verify_failed = TRUE;
+            break;
+          }
+    }
+
+  if (!self->fw_verify_failed)
+    fp_dbg ("FT9201 firmware read-back matches (%" G_GSIZE_FORMAT " bytes)",
+            (gsize) transfer->actual_length);
+  /* ACTIVATE_FW_NEXT acts on the result. */
+  fpi_ssm_next_state (transfer->ssm);
 }
 
 static void
@@ -589,19 +716,14 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
         }
       else
         {
-          GError *error = NULL;
-
           fp_dbg ("FT9201 MCU is not answering after a wake handshake "
                   "(register 0x%02x reads %02x %02x); downloading firmware",
                   FT9201_REG_MCU_SENSOR_STATUS,
                   self->reg_buf[0], self->reg_buf[1]);
 
-          if (!ft9201_load_firmware (self, &error))
-            {
-              fpi_ssm_mark_failed (ssm, error);
-              return;
-            }
-
+          /* The firmware file depends on the variant, and the branch step
+           * of the script selects the variant. It loads the file. */
+          self->fw_script = ft9201_firmware_script;
           self->fw_step = 0;
           fpi_ssm_next_state (ssm);
         }
@@ -609,7 +731,7 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
 
     case ACTIVATE_FW_STEP:
       {
-        const Ft9201Op *op = &ft9201_firmware_script[self->fw_step];
+        const Ft9201Op *op = &self->fw_script[self->fw_step];
 
         switch (op->kind)
           {
@@ -622,8 +744,56 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
             break;
 
           case FT9201_OP_IN:
+          case FT9201_OP_IN_SAVE:
             ft9201_ctrl_in (ssm, dev, op->request, op->value, op->index,
                             op->length);
+            break;
+
+          case FT9201_OP_OUT_SET_BIT0:
+            ft9201_ctrl_out (ssm, dev, op->request, self->fw_saved | 0x01,
+                             op->index);
+            break;
+
+          case FT9201_OP_BRANCH:
+            {
+              GError *error = NULL;
+
+              /* The answer can differ when the MCU still runs an earlier
+               * download. Thus the first download of this device object
+               * decides, and a later download keeps that decision. */
+              if (!self->variant_known)
+                {
+                  self->variant_b = !(self->reg_buf[0] == FT9201_BULK_CHECK_A_0 &&
+                                      self->reg_buf[1] == FT9201_BULK_CHECK_A_1);
+                  self->variant_known = TRUE;
+                }
+              fp_dbg ("FT9201 probe check reads %02x %02x: variant %s",
+                      self->reg_buf[0], self->reg_buf[1],
+                      self->variant_b ? "B" : "A");
+
+              if (!ft9201_load_firmware (self, &error))
+                {
+                  fpi_ssm_mark_failed (ssm, error);
+                  return;
+                }
+
+              self->fw_script = self->variant_b ? ft9201_firmware_script_b :
+                                ft9201_firmware_script_a;
+              self->fw_step = 0;
+              fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
+            }
+            break;
+
+          case FT9201_OP_VERIFY_IMAGE:
+            {
+              FpiUsbTransfer *transfer = fpi_usb_transfer_new (dev);
+
+              fpi_usb_transfer_fill_bulk (transfer, FT9201_EP_IMG_IN, op->value);
+              transfer->ssm = ssm;
+              fpi_usb_transfer_submit (transfer, FT9201_FW_TIMEOUT_MS,
+                                       fpi_device_get_cancellable (dev),
+                                       ft9201_verify_image_cb, NULL);
+            }
             break;
 
           case FT9201_OP_DELAY:
@@ -661,11 +831,34 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
 
     case ACTIVATE_FW_NEXT:
       {
-        const Ft9201Op *done = &ft9201_firmware_script[self->fw_step];
+        const Ft9201Op *done = &self->fw_script[self->fw_step];
 
-        if (done->kind == FT9201_OP_IN &&
-            done->request == FT9201_REQ_SFR_READ)
+        if (done->kind == FT9201_OP_VERIFY_IMAGE && self->fw_verify_failed)
+          {
+            self->fw_verify_failed = FALSE;
+            if (self->fw_reloaded)
+              {
+                fpi_ssm_mark_failed (ssm,
+                                     fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
+                                                               "firmware read-back differs from %s "
+                                                               "after a second download",
+                                                               FT9201_FIRMWARE_PATH_B));
+                return;
+              }
+            fp_warn ("FT9201 sending the firmware again after a read-back difference");
+            self->fw_reloaded = TRUE;
+            self->fw_script = ft9201_firmware_script;
+            self->fw_step = 0;
+            fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
+            return;
+          }
+
+        if ((done->kind == FT9201_OP_IN || done->kind == FT9201_OP_IN_SAVE) &&
+            (done->request == FT9201_REQ_SFR_READ ||
+             done->request == FT9201_REQ_CODE_RAM_READ))
           ft9201_note_sfr_read (self, done->index);
+        if (done->kind == FT9201_OP_IN_SAVE)
+          self->fw_saved = self->reg_buf[0];
       }
       self->fw_step++;
       fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
@@ -706,9 +899,16 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
            * revision that reports 64x80, the register 0x20 stays at
            * "01 01" for all time. It gives "a5 5a" only immediately after
            * a wake handshake. Thus the driver sends the handshake again
-           * between the reads. */
+           * between the reads.
+           *
+           * The second variant sends no handshake after the commit. Its
+           * register 0x20 gives "a5 5a" approximately 16 ms after a read
+           * that gives zeroes. */
           self->retry_count++;
-          fpi_ssm_next_state (ssm);
+          if (self->variant_b)
+            fpi_ssm_jump_to_state_delayed (ssm, ACTIVATE_WAIT_READY_READ, 16);
+          else
+            fpi_ssm_next_state (ssm);
         }
       break;
 
@@ -741,6 +941,18 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
     case ACTIVATE_STORE_CHIP_ID_LOW:
       self->chip_id |= self->reg_buf[0];
       fp_dbg ("FT9201 AFE chip id: 0x%04x", self->chip_id);
+      /* A warm open makes no download, thus no branch step selects the
+       * variant. fprintd stops after a short idle time and opens the
+       * device again with a new device object. The two known units have
+       * different chip IDs, thus the ID selects the variant here. Without
+       * this, a warm open of the second variant fails the arm check of the
+       * first variant and downloads the firmware again. */
+      if (!self->variant_known && self->chip_id == FT9201_CHIP_ID_9338)
+        {
+          self->variant_b = TRUE;
+          self->variant_known = TRUE;
+          fp_dbg ("FT9201 chip ID 0x%04x: variant B", self->chip_id);
+        }
       fpi_ssm_next_state (ssm);
       break;
 
@@ -776,7 +988,14 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
       /* The driver writes these two registers during each activation,
        * warm or cold. An earlier version wrote them only when the sensor
        * reported dimensions different from the default 0x60 x 0x60. Thus
-       * it never wrote them. The vendor driver always writes them. */
+       * it never wrote them. The vendor driver always writes them.
+       *
+       * The vendor driver does not write them on the second variant. */
+      if (self->variant_b)
+        {
+          fpi_ssm_jump_to_state (ssm, ACTIVATE_READ_CAPTURE_READY);
+          return;
+        }
       ft9201_write_register (ssm, dev, FT9201_REG_SENSOR_CONFIG_22, 0x00);
       break;
 
@@ -951,8 +1170,13 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
        * vendor driver also ends in this state. If the activation ends with
        * an idle MCU, the sensor gives 0x00 for each finger poll for the
        * remainder of the session. Therefore the driver arms the sensor
-       * again and does not continue. */
-      if (self->reg_buf[0] == FT9201_MCU_STATE_BUSY)
+       * again and does not continue.
+       *
+       * On the second variant the vendor activation ends with "00 00" in
+       * this register, and the sensor then reports touches. */
+      if ((!self->variant_b && self->reg_buf[0] == FT9201_MCU_STATE_BUSY) ||
+          (self->variant_b && self->reg_buf[0] == 0x00 &&
+           self->reg_buf[1] == 0x00))
         {
           self->rearm_retries = 0;
           fp_dbg ("FT9201 activated, MCU hunting for a finger");
@@ -986,8 +1210,6 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
            * A test on a sensor in this condition is not possible on
            * demand, because the condition is not deterministic.
            */
-          GError *error = NULL;
-
           self->rearm_retries = 0;
           self->fw_reloaded = TRUE;
           fp_warn ("FT9201 sensor did not start hunting for a finger after "
@@ -996,12 +1218,7 @@ activate_run_state (FpiSsm *ssm, FpDevice *dev)
                    FT9201_REG_MCU_SENSOR_STATUS, self->reg_buf[0],
                    self->reg_buf[1]);
 
-          if (!ft9201_load_firmware (self, &error))
-            {
-              fpi_ssm_mark_failed (ssm, error);
-              return;
-            }
-
+          self->fw_script = ft9201_firmware_script;
           self->fw_step = 0;
           fpi_ssm_jump_to_state (ssm, ACTIVATE_FW_STEP);
         }
@@ -1473,6 +1690,7 @@ ft9201_desc_dist2 (const Ft9201Keypoint *a, const Ft9201Keypoint *b)
 #define FT9201_RANSAC_TOL_PX (3.0f * FT9201_KP_UPSCALE)
 #define FT9201_RANSAC_MAX_PAIRS 400
 
+
 /*
  * Calculates the score of one new frame against one stored frame. The
  * function matches the descriptors, and then finds the largest group of
@@ -1886,6 +2104,13 @@ enum capture_states {
   CAP_KEEPALIVE_VERIFY_PRESENT,
   CAP_KEEPALIVE_VERIFY_RESUMED,
   CAP_KEEPALIVE_VERIFY_CHECK,
+  /* The second variant starts each scan with a write of 1 to the register
+   * 0x54, between two reads of the register 0x20. The vendor driver does
+   * this after a touch report without a frame, and after each frame. */
+  CAP_TRIGGER_STATUS,
+  CAP_TRIGGER_WRITE,
+  CAP_TRIGGER_AFTER,
+  CAP_TRIGGER_DONE,
   CAP_NUM_STATES,
 };
 
@@ -1918,8 +2143,12 @@ ft9201_frame_read_cb (FpiUsbTransfer *transfer, FpDevice *dev,
    * that the MCU gave its status bytes, because the driver asked for an
    * image during the busy state. The data after such a start is a field of
    * 0x00 and 0x01 bytes, and not an image. */
-  if (transfer->buffer[0] != FT9201_IMG_HEADER_MAGIC ||
-      transfer->buffer[1] != FT9201_IMG_HEADER_MAGIC)
+  if ((!self->variant_b &&
+       (transfer->buffer[0] != FT9201_IMG_HEADER_MAGIC ||
+        transfer->buffer[1] != FT9201_IMG_HEADER_MAGIC)) ||
+      (self->variant_b &&
+       (transfer->buffer[0] != FT9201_IMG_HEADER_B_0 ||
+        transfer->buffer[1] != FT9201_IMG_HEADER_B_1)))
     {
       fp_dbg ("FT9201 discarding frame with header %02x %02x",
               transfer->buffer[0], transfer->buffer[1]);
@@ -1984,7 +2213,9 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
           self->idle_polls = 0;
           fp_dbg ("FT9201 renewing auto-sensor mode after %d idle polls",
                   FT9201_KEEPALIVE_POLLS);
-          fpi_ssm_jump_to_state_delayed (ssm, CAP_KEEPALIVE_WAKE_1,
+          fpi_ssm_jump_to_state_delayed (ssm,
+                                         self->variant_b ? CAP_TRIGGER_STATUS :
+                                         CAP_KEEPALIVE_WAKE_1,
                                          FT9201_POLL_INTERVAL_MS);
         }
       else
@@ -2035,10 +2266,25 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case CAP_CHECK_PRESENT:
+      /* The second variant reports a touch in two steps. Refer to
+       * FT9201_FINGER_READY_B. */
+      if (self->variant_b && self->reg_buf[0] == FT9201_FINGER_READY_B)
+        {
+          self->spurious_polls = 0;
+          fpi_device_report_finger_status (dev, FP_FINGER_STATUS_PRESENT);
+          fpi_ssm_next_state (ssm);
+          break;
+        }
+      if (self->variant_b && self->reg_buf[0] == FT9201_FINGER_TOUCH_B)
+        {
+          fpi_ssm_jump_to_state (ssm, CAP_TRIGGER_STATUS);
+          break;
+        }
+
       /* Only the value 0xa0 occurs with a true frame. The value 0x01 is
        * the busy pattern of the MCU. One such poll for each capture is
        * usual, immediately after an arm operation. */
-      if (self->reg_buf[0] == FT9201_FINGER_PRESENT_A0)
+      if (!self->variant_b && self->reg_buf[0] == FT9201_FINGER_PRESENT_A0)
         {
           self->spurious_polls = 0;
           fpi_device_report_finger_status (dev, FP_FINGER_STATUS_PRESENT);
@@ -2068,7 +2314,8 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case CAP_MODE_RESET_DELAY:
-      fpi_ssm_next_state_delayed (ssm, 15);
+      /* The vendor waits 24 ms here on the second variant. */
+      fpi_ssm_next_state_delayed (ssm, self->variant_b ? 25 : 15);
       break;
 
     case CAP_MODE_IN:
@@ -2102,6 +2349,11 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
       break;
 
     case CAP_REARM_READ:
+      if (self->variant_b)
+        {
+          fpi_ssm_jump_to_state (ssm, CAP_TRIGGER_STATUS);
+          return;
+        }
       ft9201_read_register (ssm, dev, FT9201_REG_MCU_SENSOR_STATUS);
       break;
 
@@ -2220,6 +2472,24 @@ capture_run_state (FpiSsm *ssm, FpDevice *dev)
                    FT9201_MCU_STATE_BUSY, FT9201_MCU_STATE_BUSY);
         }
 
+      /* If the driver holds a frame, an action waits for that frame. */
+      if (self->frame != NULL)
+        fpi_ssm_jump_to_state_delayed (ssm, CAP_FRAME_DONE, 20);
+      else
+        fpi_ssm_jump_to_state_delayed (ssm, CAP_POLL_FINGER,
+                                       FT9201_POLL_INTERVAL_MS);
+      break;
+
+    case CAP_TRIGGER_STATUS:
+    case CAP_TRIGGER_AFTER:
+      ft9201_read_register (ssm, dev, FT9201_REG_MCU_SENSOR_STATUS);
+      break;
+
+    case CAP_TRIGGER_WRITE:
+      ft9201_write_register (ssm, dev, FT9201_REG_SCAN_TRIGGER, 1);
+      break;
+
+    case CAP_TRIGGER_DONE:
       /* If the driver holds a frame, an action waits for that frame. */
       if (self->frame != NULL)
         fpi_ssm_jump_to_state_delayed (ssm, CAP_FRAME_DONE, 20);
@@ -2453,6 +2723,7 @@ dev_open (FpDevice *dev)
     }
 
   self->retry_count = 0;
+  self->fw_script = ft9201_firmware_script;
   self->fw_step = 0;
   self->fw_reloaded = FALSE;
   self->task_ssm = fpi_ssm_new (dev, activate_run_state, ACTIVATE_NUM_STATES);

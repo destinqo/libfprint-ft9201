@@ -75,6 +75,62 @@ The tests used a physical `2808:93a9` unit with `bcdDevice 0100`.
   keeps `ppmm` at 0 if a driver does not set it.
 
 
+## The second variant (chip ID `0x9338`)
+
+A second `2808:93a9` unit (`bcdDevice 0100`, SUI version `01 06`) did not
+start with the download above. A `usbmon` capture on the Linux host
+recorded the vendor driver (1.0.3.58) in a Windows guest with USB
+pass-through. These items come from that capture, and a test of this driver
+on the unit confirmed each of them.
+
+- **The variant shows at the probe check.** After the probe word, the
+  request `0x30` gives `00 00 00 00` on this unit, and `0x50 0x2b` on the
+  first unit. This is the first answer that differs. The driver selects the
+  variant from it. A warm open makes no download, thus the driver also
+  selects the variant from the chip ID. A later run of the check gave
+  `11 ee` and `be be` on this unit, thus only `50 2b` selects the first
+  variant.
+- **The SFR group uses the requests `0x68` and `0x69`,** and not `0x65` and
+  `0x66`. The vendor writes back each value that it read with bit 0 set:
+  `0x00c8` reads `0x9a`, the vendor writes `0x9b`. The location `0x00f3`
+  reads `0x11`, thus the type is 8.
+- **The download differs.** One unlock group, not three. Then five writes
+  with the request `0x03`: `0x00ff` to `0x00c8`, `0x00ca` and `0x00cb`, then
+  `0x00bf` and `0x00ff` to `0x00b9`. The image has 14186 bytes (`0x376a`),
+  sent as 14208. It is at the offset `0x10080` of `ftUsbWbioDriver.dll`,
+  with the SHA-256 `dec4e9d7...b4b6` for the 14208 bytes.
+- **The vendor reads the image back before the commit:** `0x34 0x00ff`,
+  `0x34 0x0003`, `0x35` with the length `0x376a` at the address `0x0000`,
+  and a bulk IN of 14186 bytes. The driver compares them with the file. In
+  one test the first comparison after a new connection failed, and a
+  second download passed. The driver now waits 17 ms before the read, as
+  the vendor does, and sends the firmware again one time on a difference.
+- **No handshake follows the commit.** The register `0x20` reads `00 00`,
+  and then `a5 5a` approximately 16 ms later. The vendor does not write
+  the registers `0x22` and `0x23`.
+- **The sensor is 88x88,** and the AFE chip ID is `0x9338`. Each frame
+  starts with `c0 e0` and not `dd dd`.
+- **A touch has two steps.** The request `0x43` gives `01`. The register
+  `0x30` reads `bb`. The register `0x1d` then reads `00`: the sensor saw a
+  touch and did not scan. The vendor reads `0x20` (`a5 5a`), writes 1 to
+  the register `0x54`, and reads `0x20` again (`00 00`). The next touch
+  report gives `01` in `0x1d`, and the vendor reads the frame. After each
+  frame the vendor does the same three steps with `0x54`. In the capture,
+  each of 21 frames followed this pattern.
+- **After the arm writes, `0x20` reads `00 00`** and not `01 01`. The
+  sensor then reports touches.
+
+Measured on this unit with the driver: a cold open needs approximately
+850 ms, a warm open approximately 120 ms. A 15-stage enrolment passed. The
+enrolled finger matched in 4 of 6 attempts; the two rejects were presses
+off the centre. Other fingers and light edge presses matched in 0 of 7
+attempts. These numbers come from one person.
+
+Not confirmed on this variant: the renewal of the detection after a long
+idle period. The driver writes `0x54` after 1000 polls without a finger,
+but the capture has no such idle period. The ridge period is approximately
+9.3 pixels on four frames, and the matcher uses 10.7.
+
 ## Not confirmed
 
 - **The match threshold on more than one person.** The section

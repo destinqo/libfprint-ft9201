@@ -181,6 +181,21 @@ sudo apt install cabextract      # Debian and Ubuntu
 The extractor also accepts `p7zip` or `bsdtar` for this step. It tells you
 when the system has none of them.
 
+**A second hardware variant needs a different image.** Some units with the
+same USB ID have the AFE chip ID `0x9338` and an 88x88 sensor. The vendor
+driver sends them a different image. The driver identifies the variant
+itself, and it reads the image from a different path. If the log of
+`fprintd` gives `variant B`, install that image too:
+
+```bash
+./ft9201-extract-firmware.py --download --variant b
+sudo install -D -m 0644 ft9201-b.bin /lib/firmware/focaltech/ft9201-b.bin
+```
+
+You can install both images. The driver uses only the image for the
+variant that it finds. [`docs/PROTOCOL.md`](docs/PROTOCOL.md) gives the
+differences between the two variants.
+
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md) gives three more methods that read
 a local vendor file, and it gives the provenance of the image.
 

@@ -187,6 +187,44 @@
  * capture, then install it at the path below. Refer to the README. */
 #define FT9201_FIRMWARE_PATH "/lib/firmware/focaltech/ft9201.bin"
 
+/* The second hardware variant.
+ *
+ * A second unit with the same USB ID answers the download differently. A
+ * usbmon capture of the Windows vendor driver (1.0.3.58) on that unit
+ * shows a different branch of the vendor download:
+ *
+ * - The check after the probe word gives 00 00 and not 0x50 0x2b. The
+ *   driver uses this answer to select the variant, because it is the first
+ *   answer that differs.
+ * - The SFR reads and writes use the requests 0x68 and 0x69, and the type
+ *   location 0x00f3 reads 0x11.
+ * - The vendor sends a different image of 14186 bytes, and it reads the
+ *   image back before the commit.
+ * - The sensor reports 88 x 88. Each frame starts with "c0 e0".
+ * - A touch first gives 0x00 in the register 0x1d. The vendor then writes 1
+ *   to the register 0x54, which starts the scan, and the next touch report
+ *   gives 0x01 in the register 0x1d. The vendor reads the frame only then.
+ *
+ * The vendor driver holds three images. This variant uses the image at the
+ * offset 0x10080 of ftUsbWbioDriver.dll. Install it at the path below. */
+#define FT9201_FIRMWARE_PATH_B "/lib/firmware/focaltech/ft9201-b.bin"
+#define FT9201_FW_B_IMAGE_SIZE 0x376a
+
+/* The answer of the check after the probe word on the first variant. */
+#define FT9201_BULK_CHECK_A_0 0x50
+#define FT9201_BULK_CHECK_A_1 0x2b
+
+/* The register that starts a scan on the second variant. */
+#define FT9201_REG_SCAN_TRIGGER 0x54
+
+/* On the second variant, register 0x1d gives 0x01 when a frame is ready,
+ * and 0x00 when the sensor saw a touch but did not scan yet. */
+#define FT9201_FINGER_READY_B 0x01
+#define FT9201_FINGER_TOUCH_B 0x00
+
+#define FT9201_IMG_HEADER_B_0 0xc0
+#define FT9201_IMG_HEADER_B_1 0xe0
+
 /* The download goes to the code RAM offset 0. The driver gives the device
  * the length in units of 64 bytes. The limits below are a check on a file
  * from the disk, and not a limit of the protocol. The known image has

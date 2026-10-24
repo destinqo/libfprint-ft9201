@@ -87,6 +87,16 @@ KNOWN_SHA256 = "0999f2f41fda7f97bfaa7589b5ad6504c7ee068795aecd899f98f443e58342bb
 KNOWN_SHA256_LINUX = ("907cb638936eb36904eb74e30d4b2b476c25037fdff29666f6bac"
                       "970d326d4b2")
 
+# The image for the second hardware variant (chip ID 0x9338, 88x88). The
+# Windows driver holds it at the offset 0x10080 of ftUsbWbioDriver.dll, and
+# sends it to a unit whose probe check gives 00 00. It does not have the
+# ramp table below, thus the search uses the start of its 8051 vector area.
+# The image has 0x376a bytes. The vendor sends it padded to 64-byte units.
+FW_B_HEAD = bytes.fromhex("0232ab0234c9c28602353202361343ec")
+FW_B_LENGTH = 0x376a
+KNOWN_SHA256_B = ("dec4e9d75c1c2520e955bbf802db027c04027af938691cd064bbca"
+                  "da14e6b4b6")
+
 # Every firmware image seen so far opens with an 8051 vector area followed by
 # this ramp table. The table is the reliable part: the LJMP targets around it
 # differ between images, the table does not.
@@ -157,8 +167,29 @@ def _looks_like_image_start(data: bytes, start: int) -> bool:
     return data[start] == 0x02 and data[start + 6] == 0x0B and data[start + 7] == 0x80
 
 
-def extract_from_binary(data: bytes) -> bytes:
+def extract_variant_b(data: bytes) -> bytes:
+    """Pull the image of the second variant out of the vendor driver."""
+    start = data.find(FW_B_HEAD)
+    if start < 0:
+        raise CaptureError(
+            "no image for the second variant found in this file. Expected "
+            "the vendor's Windows driver (ftUsbWbioDriver.dll)."
+        )
+    padded = -(-FW_B_LENGTH // CHUNK_SIZE) * CHUNK_SIZE
+    if start + padded > len(data):
+        raise CaptureError(
+            f"image at 0x{start:x} claims {FW_B_LENGTH} bytes but the file ends first"
+        )
+    print(f"  variant B image at 0x{start:x}, {FW_B_LENGTH} bytes, uploaded "
+          f"as {padded}", file=sys.stderr)
+    return data[start:start + padded]
+
+
+def extract_from_binary(data: bytes, variant: str = "a") -> bytes:
     """Pull the firmware out of the vendor driver binary."""
+    if variant == "b":
+        return extract_variant_b(data)
+
     starts = []
     off = -1
     while True:
@@ -208,7 +239,7 @@ def extract_from_binary(data: bytes) -> bytes:
     return data[start:start + padded]
 
 
-def extract(path: Path) -> bytes:
+def extract(path: Path, variant: str = "a") -> bytes:
     with path.open("rb") as handle:
         raw = handle.read()
 
@@ -223,7 +254,7 @@ def extract(path: Path) -> bytes:
         else:
             print("input is not a pcapng capture; searching it as a binary",
                   file=sys.stderr)
-        return extract_from_binary(raw)
+        return extract_from_binary(raw, variant)
 
     print("input looks like a pcapng capture", file=sys.stderr)
     linktypes: list[int] = []
@@ -453,13 +484,21 @@ def main() -> int:
     parser.add_argument("source", type=Path, nargs="?",
                         help="ftUsbWbioDriver.dll, the vendor libfprint-2.so, "
                              "or a .pcapng capture. Omit it with --download.")
-    parser.add_argument("-o", "--output", type=Path, default=Path("ft9201.bin"),
-                        help="where to write the image (default: ft9201.bin)")
+    parser.add_argument("-o", "--output", type=Path, default=None,
+                        help="where to write the image (default: ft9201.bin, "
+                             "or ft9201-b.bin with --variant b)")
+    parser.add_argument("--variant", choices=("a", "b"), default="a",
+                        help="the hardware variant. The driver writes the "
+                             "variant to the log: 'probe check reads ..: "
+                             "variant B'. Variant B has the chip ID 0x9338 and "
+                             "an 88x88 sensor (default: a)")
     parser.add_argument("--download", action="store_true",
                         help="take the vendor driver from the Microsoft "
                              "Update Catalog, which is public and needs no "
                              "Windows machine")
     args = parser.parse_args()
+    if args.output is None:
+        args.output = Path("ft9201-b.bin" if args.variant == "b" else "ft9201.bin")
 
     if args.download and args.source is not None:
         print("error: give a source file or --download, and not both",
@@ -478,9 +517,9 @@ def main() -> int:
         if args.download:
             with tempfile.TemporaryDirectory(prefix="ft9201-") as work:
                 driver = download_driver_cab(Path(work))
-                blob = extract(driver)
+                blob = extract(driver, args.variant)
         else:
-            blob = extract(args.source)
+            blob = extract(args.source, args.variant)
     except CaptureError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -491,7 +530,10 @@ def main() -> int:
 
     print(f"wrote {args.output} ({len(blob)} bytes)")
     print(f"sha256 {digest}")
-    if digest == KNOWN_SHA256:
+    if digest == KNOWN_SHA256_B:
+        print("this matches the image of the second variant that a USB "
+              "capture of the\nvendor driver confirmed (chip ID 0x9338, 88x88)")
+    elif digest == KNOWN_SHA256:
         print("this matches the image verified on real hardware by this "
               "project (reports a 96x96 sensor)")
     elif digest == KNOWN_SHA256_LINUX:
@@ -505,9 +547,10 @@ def main() -> int:
               "      That is expected for a different vendor driver revision; "
               "the driver\n"
               "      will tell you if the sensor does not accept it.")
+    target = "ft9201-b.bin" if args.variant == "b" else "ft9201.bin"
     print(f"\ninstall it with:\n"
           f"  sudo install -D -m 0644 {args.output} "
-          f"/lib/firmware/focaltech/ft9201.bin")
+          f"/lib/firmware/focaltech/{target}")
     return 0
 
 
