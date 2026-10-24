@@ -1474,6 +1474,20 @@ ft9201_desc_dist2 (const Ft9201Keypoint *a, const Ft9201Keypoint *b)
 #define FT9201_RANSAC_MAX_PAIRS 400
 
 /*
+ * The minimum number of agreeing pairs for a score that is not zero.
+ *
+ * The two pairs that define a motion always agree with that motion. Thus
+ * each hypothesis has at least two inliers, also for two different
+ * fingers. The score divides the inliers by the keypoint count of the
+ * smaller side. A frame with few keypoints, for example a light press on
+ * the edge, then reaches the threshold from these two inliers alone: 2 of
+ * 20 keypoints is 0.10. This limit removes that path. For a usual frame
+ * with approximately 100 keypoints the threshold already needs 8 inliers,
+ * thus this limit does not change those scores.
+ */
+#define FT9201_MATCH_MIN_INLIERS 6
+
+/*
  * Calculates the score of one new frame against one stored frame. The
  * function matches the descriptors, and then finds the largest group of
  * pairs that agree on one motion. The motion has one turn and one
@@ -1486,6 +1500,7 @@ ft9201_match_pair (const Ft9201Features *a, const Ft9201Features *b)
 {
   guint pairs = 0;
   guint16 ai[FT9201_KP_MAX], bi[FT9201_KP_MAX];
+  gboolean b_used[FT9201_KP_MAX];
   gint best_inliers = 0;
 
   if (a->n < 4 || b->n < 4)
@@ -1547,6 +1562,10 @@ ft9201_match_pair (const Ft9201Features *a, const Ft9201Features *b)
         tx = a1->x - (b1->x * ca - b1->y * sa);
         ty = a1->y - (b1->x * sa + b1->y * ca);
 
+        /* The ratio test does not stop two keypoints of the template from
+         * picking the same keypoint of the new frame. Each keypoint of the
+         * new frame counts as one inlier at most. */
+        memset (b_used, 0, sizeof (b_used));
         for (guint r = 0; r < pairs; r++)
           {
             const Ft9201Keypoint *ka = &a->kp[ai[r]], *kb = &b->kp[bi[r]];
@@ -1554,12 +1573,19 @@ ft9201_match_pair (const Ft9201Features *a, const Ft9201Features *b)
             gfloat py = kb->x * sa + kb->y * ca + ty;
             gfloat ex = px - ka->x, ey = py - ka->y;
 
-            if (ex * ex + ey * ey <= FT9201_RANSAC_TOL_PX * FT9201_RANSAC_TOL_PX)
-              inliers++;
+            if (ex * ex + ey * ey <= FT9201_RANSAC_TOL_PX * FT9201_RANSAC_TOL_PX &&
+                !b_used[bi[r]])
+              {
+                b_used[bi[r]] = TRUE;
+                inliers++;
+              }
           }
         if (inliers > best_inliers)
           best_inliers = inliers;
       }
+
+  if (best_inliers < FT9201_MATCH_MIN_INLIERS)
+    return 0.0f;
 
   /* The function divides by the number of keypoints of the smaller side.
    * Thus the score of a full press and the score of a partial press are
